@@ -3,7 +3,12 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const config = require("../config");
-const { query } = require("../db");
+const {
+  findUserByUsername,
+  withClassName,
+  getDocById,
+  updateDocById
+} = require("../fdb");
 const { loginSchema, changePasswordSchema } = require("../validation");
 const {
   hashPassword,
@@ -29,34 +34,35 @@ const loginLimiter = rateLimit({
   }
 });
 
+function lockState(user) {
+  const lockedUntil = user.locked_until instanceof Date ? user.locked_until : null;
+  const now = Date.now();
+  return {
+    isLocked: Boolean(lockedUntil && lockedUntil.getTime() > now),
+    lockExpired: Boolean(lockedUntil && lockedUntil.getTime() <= now)
+  };
+}
+
 router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
   const input = loginSchema.parse(req.body);
 
-  const rows = await query(
-    `SELECT u.*, c.name AS class_name,
-            CASE WHEN u.locked_until IS NOT NULL AND u.locked_until > NOW() THEN 1 ELSE 0 END AS is_locked,
-            CASE WHEN u.locked_until IS NOT NULL AND u.locked_until <= NOW() THEN 1 ELSE 0 END AS lock_expired
-       FROM users u
-       LEFT JOIN classes c ON c.id = u.class_id
-      WHERE u.username = ?
-      LIMIT 1`,
-    [input.username]
-  );
-  const user = rows[0];
+  const found = await findUserByUsername(input.username);
+  const user = found ? await withClassName(found) : null;
 
   if (!user) {
     await verifyDummyPassword(input.password);
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
-  if (toBoolean(user.is_locked)) {
+  const { isLocked, lockExpired } = lockState(user);
+  if (isLocked) {
     return res.status(429).json({ error: "Too many failed attempts. Please try again later." });
   }
 
   let failedAttempts = Number(user.failed_login_attempts) || 0;
-  if (toBoolean(user.lock_expired)) {
+  if (lockExpired) {
     failedAttempts = 0;
-    await query("UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?", [user.id]);
+    await updateDocById("users", user.id, { failed_login_attempts: 0, locked_until: null });
   }
 
   if (!toBoolean(user.active)) {
@@ -68,20 +74,24 @@ router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
   if (!passwordOk) {
     failedAttempts += 1;
     if (failedAttempts >= config.loginMaxAttempts) {
-      await query(
-        "UPDATE users SET failed_login_attempts = ?, locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?",
-        [failedAttempts, config.loginLockMinutes, user.id]
-      );
+      await updateDocById("users", user.id, {
+        failed_login_attempts: failedAttempts,
+        locked_until: new Date(Date.now() + config.loginLockMinutes * 60000)
+      });
     } else {
-      await query("UPDATE users SET failed_login_attempts = ?, locked_until = NULL WHERE id = ?", [failedAttempts, user.id]);
+      await updateDocById("users", user.id, {
+        failed_login_attempts: failedAttempts,
+        locked_until: null
+      });
     }
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
-  await query(
-    "UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = ?",
-    [user.id]
-  );
+  await updateDocById("users", user.id, {
+    failed_login_attempts: 0,
+    locked_until: null,
+    last_login_at: new Date()
+  });
 
   const token = signSession(user);
   setSessionCookie(res, token);
@@ -104,32 +114,21 @@ router.post("/change-password", authenticate, asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "The new password must be different from the current password." });
   }
 
-  const rows = await query("SELECT password_hash FROM users WHERE id = ? LIMIT 1", [req.user.id]);
-  if (!rows[0] || !(await verifyPassword(input.currentPassword, rows[0].password_hash))) {
+  const current = await getDocById("users", req.user.id);
+  if (!current || !(await verifyPassword(input.currentPassword, current.password_hash))) {
     return res.status(400).json({ error: "Current password is incorrect." });
   }
 
   const passwordHash = await hashPassword(input.newPassword);
-  await query(
-    `UPDATE users
-        SET password_hash = ?,
-            must_change_password = 0,
-            token_version = token_version + 1,
-            failed_login_attempts = 0,
-            locked_until = NULL
-      WHERE id = ?`,
-    [passwordHash, req.user.id]
-  );
+  await updateDocById("users", req.user.id, {
+    password_hash: passwordHash,
+    must_change_password: false,
+    token_version: Number(current.token_version || 0) + 1,
+    failed_login_attempts: 0,
+    locked_until: null
+  });
 
-  const updatedRows = await query(
-    `SELECT u.*, c.name AS class_name
-       FROM users u
-       LEFT JOIN classes c ON c.id = u.class_id
-      WHERE u.id = ?
-      LIMIT 1`,
-    [req.user.id]
-  );
-  const updated = updatedRows[0];
+  const updated = await withClassName(await getDocById("users", req.user.id));
   const token = signSession(updated);
   setSessionCookie(res, token);
   await logActivity(updated, "Changed account password");

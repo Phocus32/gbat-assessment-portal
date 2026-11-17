@@ -2,14 +2,29 @@
 
 const express = require("express");
 const multer = require("multer");
-const { query } = require("../db");
+const {
+  listAll,
+  listWhere,
+  listClasses,
+  getDocById,
+  updateDocById,
+  findClassByName,
+  createClass,
+  renameClass,
+  deleteClass,
+  findUserByUsername,
+  createUser,
+  deleteUser,
+  recentDocs,
+  getSetting,
+  setSetting
+} = require("../fdb");
 const { hashPassword } = require("../security");
 const { buildStudentTemplate } = require("../excel");
 const { importStudentsFromWorkbook, ExcelInputError } = require("../student-import");
 const {
   asyncHandler,
   publicUser,
-  toBoolean,
   generateTemporaryPassword,
   logActivity
 } = require("../utils");
@@ -29,8 +44,17 @@ const uploadExcel = multer({
   limits: { fileSize: 8 * 1024 * 1024, files: 1 }
 });
 
+const ROLE_ORDER = { admin: 1, teacher: 2, student: 3 };
+
+function attachClassName(user, classMap) {
+  const className = user.class_id === null || user.class_id === undefined
+    ? null
+    : (classMap.get(Number(user.class_id)) || null);
+  return publicUser({ ...user, class_name: className });
+}
+
 router.get("/students/template.xlsx", asyncHandler(async (req, res) => {
-  const classes = await query("SELECT name FROM classes ORDER BY name");
+  const classes = await listClasses();
   const buffer = await buildStudentTemplate(classes.map(cls => cls.name));
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", "attachment; filename=\"gbat-student-import-template.xlsx\"");
@@ -47,47 +71,48 @@ router.post("/students/import", uploadExcel.single("file"), asyncHandler(async (
 }));
 
 router.get("/bootstrap", asyncHandler(async (req, res) => {
-  const [users, classes, logs, settings, statsRows] = await Promise.all([
-    query(
-      `SELECT u.id, u.name, u.username, u.role, u.class_id, c.name AS class_name,
-              u.active, u.must_change_password, u.last_login_at, u.created_at
-         FROM users u
-         LEFT JOIN classes c ON c.id = u.class_id
-        ORDER BY FIELD(u.role, 'admin', 'teacher', 'student'), u.name`
-    ),
-    query(
-      `SELECT c.id, c.name, c.created_at,
-              (SELECT COUNT(*) FROM users u WHERE u.class_id = c.id AND u.role = 'student') AS student_count,
-              (SELECT COUNT(*) FROM quizzes q WHERE q.class_id = c.id AND q.is_deleted = 0) AS quiz_count
-         FROM classes c
-        ORDER BY c.name`
-    ),
-    query(
-      `SELECT id, actor_name, action, created_at
-         FROM activity_logs
-        ORDER BY id DESC
-        LIMIT 100`
-    ),
-    query("SELECT setting_value FROM settings WHERE setting_key = 'default_quiz_minutes' LIMIT 1"),
-    query(
-      `SELECT
-         (SELECT COUNT(*) FROM users WHERE role = 'student') AS students,
-         (SELECT COUNT(*) FROM users WHERE role = 'teacher') AS teachers,
-         (SELECT COUNT(*) FROM classes) AS classes,
-         (SELECT ROUND(AVG(pct)) FROM submissions) AS average,
-         (SELECT COUNT(*) FROM quizzes WHERE is_open = 1 AND is_deleted = 0) AS open_quizzes`
-    )
+  const [users, classes, logs, defaultMinutes, submissions, quizzes] = await Promise.all([
+    listAll("users"),
+    listClasses(),
+    recentDocs("activity_logs", 100),
+    getSetting("default_quiz_minutes"),
+    listAll("submissions"),
+    listAll("quizzes")
   ]);
 
-  const defaultQuizMinutes = Number(settings[0] ? settings[0].setting_value : 45);
+  const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+
+  const studentsByClass = new Map();
+  for (const user of users) {
+    if (user.role !== "student" || user.class_id === null || user.class_id === undefined) continue;
+    const key = Number(user.class_id);
+    studentsByClass.set(key, (studentsByClass.get(key) || 0) + 1);
+  }
+  const quizzesByClass = new Map();
+  let openQuizzes = 0;
+  for (const quiz of quizzes) {
+    if (quiz.is_deleted) continue;
+    const key = Number(quiz.class_id);
+    quizzesByClass.set(key, (quizzesByClass.get(key) || 0) + 1);
+    if (quiz.is_open) openQuizzes += 1;
+  }
+
+  const sortedUsers = [...users].sort((a, b) => {
+    const roleDiff = (ROLE_ORDER[a.role] || 4) - (ROLE_ORDER[b.role] || 4);
+    return roleDiff || a.name.localeCompare(b.name);
+  });
+
+  const average = submissions.length
+    ? Math.round(submissions.reduce((sum, row) => sum + Number(row.pct || 0), 0) / submissions.length)
+    : 0;
 
   res.json({
-    users: users.map(publicUser),
+    users: sortedUsers.map(user => attachClassName(user, classMap)),
     classes: classes.map(cls => ({
       id: cls.id,
       name: cls.name,
-      studentCount: Number(cls.student_count),
-      quizCount: Number(cls.quiz_count),
+      studentCount: studentsByClass.get(Number(cls.id)) || 0,
+      quizCount: quizzesByClass.get(Number(cls.id)) || 0,
       createdAt: cls.created_at
     })),
     logs: logs.map(log => ({
@@ -96,61 +121,56 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       action: log.action,
       createdAt: log.created_at
     })),
-    settings: { defaultQuizMinutes },
+    settings: { defaultQuizMinutes: Number(defaultMinutes || 45) },
     stats: {
-      students: Number(statsRows[0].students),
-      teachers: Number(statsRows[0].teachers),
-      classes: Number(statsRows[0].classes),
-      average: Number(statsRows[0].average || 0),
-      openQuizzes: Number(statsRows[0].open_quizzes)
+      students: users.filter(user => user.role === "student").length,
+      teachers: users.filter(user => user.role === "teacher").length,
+      classes: classes.length,
+      average,
+      openQuizzes
     }
   });
 }));
 
 router.post("/classes", asyncHandler(async (req, res) => {
   const input = classCreateSchema.parse(req.body);
-  const existing = await query("SELECT id FROM classes WHERE name = ? LIMIT 1", [input.name]);
-  if (existing.length) {
+  if (await findClassByName(input.name)) {
     return res.status(409).json({ error: "A class with that name already exists." });
   }
 
-  const result = await query("INSERT INTO classes (name) VALUES (?)", [input.name]);
+  const id = await createClass(input.name);
   await logActivity(req.user, `Created class ${input.name}`);
-  return res.status(201).json({ class: { id: result.insertId, name: input.name } });
+  return res.status(201).json({ class: { id, name: input.name } });
 }));
 
 router.patch("/classes/:id", asyncHandler(async (req, res) => {
   const classId = idSchema.parse(req.params.id);
   const input = classUpdateSchema.parse(req.body);
 
-  const rows = await query("SELECT id, name FROM classes WHERE id = ? LIMIT 1", [classId]);
-  const target = rows[0];
+  const target = await getDocById("classes", classId);
   if (!target) return res.status(404).json({ error: "Class not found." });
 
-  const duplicate = await query("SELECT id FROM classes WHERE name = ? AND id <> ? LIMIT 1", [input.name, classId]);
-  if (duplicate.length) {
+  const duplicate = await findClassByName(input.name);
+  if (duplicate && Number(duplicate.id) !== Number(classId)) {
     return res.status(409).json({ error: "A class with that name already exists." });
   }
 
-  await query("UPDATE classes SET name = ? WHERE id = ?", [input.name, classId]);
+  await renameClass(classId, input.name);
   await logActivity(req.user, `Renamed class "${target.name}" to "${input.name}"`);
   return res.json({ class: { id: classId, name: input.name } });
 }));
 
 router.delete("/classes/:id", asyncHandler(async (req, res) => {
   const classId = idSchema.parse(req.params.id);
-  const rows = await query("SELECT id, name FROM classes WHERE id = ? LIMIT 1", [classId]);
-  const target = rows[0];
+  const target = await getDocById("classes", classId);
   if (!target) return res.status(404).json({ error: "Class not found." });
 
-  const counts = await query(
-    `SELECT
-       (SELECT COUNT(*) FROM users WHERE class_id = ? AND role = 'student') AS student_count,
-       (SELECT COUNT(*) FROM quizzes WHERE class_id = ?) AS quiz_count`,
-    [classId, classId]
-  );
-  const studentCount = Number(counts[0].student_count);
-  const quizCount = Number(counts[0].quiz_count);
+  const [students, quizzes] = await Promise.all([
+    listWhere("users", "class_id", classId),
+    listWhere("quizzes", "class_id", classId)
+  ]);
+  const studentCount = students.filter(user => user.role === "student").length;
+  const quizCount = quizzes.filter(quiz => !quiz.is_deleted).length;
 
   if (studentCount > 0 || quizCount > 0) {
     return res.status(409).json({
@@ -158,7 +178,7 @@ router.delete("/classes/:id", asyncHandler(async (req, res) => {
     });
   }
 
-  await query("DELETE FROM classes WHERE id = ?", [classId]);
+  await deleteClass(classId);
   await logActivity(req.user, `Deleted class ${target.name}`);
   return res.json({ ok: true });
 }));
@@ -166,38 +186,41 @@ router.delete("/classes/:id", asyncHandler(async (req, res) => {
 router.post("/users", asyncHandler(async (req, res) => {
   const input = userCreateSchema.parse(req.body);
 
-  const duplicate = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [input.username]);
-  if (duplicate.length) {
+  if (await findUserByUsername(input.username)) {
     return res.status(409).json({ error: "That username is already in use." });
   }
 
   let classId = null;
   if (input.role === "student") {
-    const classRows = await query("SELECT id, name FROM classes WHERE id = ? LIMIT 1", [input.classId]);
-    if (!classRows[0]) return res.status(400).json({ error: "Select a valid class for the student." });
-    classId = classRows[0].id;
+    const cls = await getDocById("classes", input.classId);
+    if (!cls) return res.status(400).json({ error: "Select a valid class for the student." });
+    classId = cls.id;
   }
 
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
 
-  const result = await query(
-    `INSERT INTO users (name, username, password_hash, role, class_id, must_change_password)
-     VALUES (?, ?, ?, ?, ?, 1)`,
-    [input.name, input.username, passwordHash, input.role, classId]
-  );
+  const userId = await createUser({
+    name: input.name,
+    username: input.username,
+    password_hash: passwordHash,
+    role: input.role,
+    class_id: classId,
+    active: true,
+    must_change_password: true,
+    failed_login_attempts: 0,
+    locked_until: null,
+    token_version: 0,
+    last_login_at: null,
+    created_at: new Date()
+  });
 
-  const createdRows = await query(
-    `SELECT u.*, c.name AS class_name
-       FROM users u
-       LEFT JOIN classes c ON c.id = u.class_id
-      WHERE u.id = ?`,
-    [result.insertId]
-  );
+  const created = await getDocById("users", userId);
+  const className = classId === null ? null : (await getDocById("classes", classId)).name;
 
   await logActivity(req.user, `Created ${input.role} account "${input.name}" (${input.username})`);
   return res.status(201).json({
-    user: publicUser(createdRows[0]),
+    user: publicUser({ ...created, class_name: className }),
     temporaryPassword
   });
 }));
@@ -206,34 +229,27 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
   const userId = idSchema.parse(req.params.id);
   const input = userUpdateSchema.parse(req.body);
 
-  const rows = await query(
-    `SELECT u.*, c.name AS class_name
-       FROM users u
-       LEFT JOIN classes c ON c.id = u.class_id
-      WHERE u.id = ?
-      LIMIT 1`,
-    [userId]
-  );
-  const target = rows[0];
+  const target = await getDocById("users", userId);
   if (!target) return res.status(404).json({ error: "User not found." });
   if (target.role === "admin") {
     return res.status(403).json({ error: "Admin accounts are managed from the command line." });
   }
 
-  if (typeof input.active === "boolean" && input.active === false && target.id === req.user.id) {
+  if (typeof input.active === "boolean" && input.active === false && Number(target.id) === Number(req.user.id)) {
     return res.status(400).json({ error: "You cannot deactivate your own account." });
   }
 
-  const updates = [];
-  const params = [];
+  const patch = {};
   const actions = [];
+  let bumpToken = false;
 
   if (typeof input.active === "boolean") {
-    updates.push("active = ?", "token_version = token_version + 1");
-    params.push(input.active ? 1 : 0);
+    patch.active = input.active;
+    bumpToken = true;
     actions.push(`${input.active ? "Activated" : "Suspended"} user ${target.name}`);
   }
 
+  let className = target.class_id === null || target.class_id === undefined ? null : undefined;
   if (input.classId !== undefined) {
     if (target.role !== "student") {
       return res.status(400).json({ error: "Only student accounts can be assigned to a class." });
@@ -241,38 +257,37 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
     if (!input.classId) {
       return res.status(400).json({ error: "Students must belong to a class." });
     }
-    const classRows = await query("SELECT id, name FROM classes WHERE id = ? LIMIT 1", [input.classId]);
-    if (!classRows[0]) return res.status(400).json({ error: "Class not found." });
-    updates.push("class_id = ?");
-    params.push(classRows[0].id);
-    actions.push(`Moved ${target.name} to ${classRows[0].name}`);
+    const cls = await getDocById("classes", input.classId);
+    if (!cls) return res.status(400).json({ error: "Class not found." });
+    patch.class_id = cls.id;
+    className = cls.name;
+    actions.push(`Moved ${target.name} to ${cls.name}`);
   }
 
-  if (!updates.length) {
+  if (!Object.keys(patch).length) {
     return res.status(400).json({ error: "No changes were supplied." });
   }
 
-  params.push(userId);
-  await query(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, params);
+  if (bumpToken) patch.token_version = Number(target.token_version || 0) + 1;
+  await updateDocById("users", userId, patch);
 
   for (const action of actions) {
     await logActivity(req.user, action);
   }
 
-  const updatedRows = await query(
-    `SELECT u.*, c.name AS class_name
-       FROM users u
-       LEFT JOIN classes c ON c.id = u.class_id
-      WHERE u.id = ?`,
-    [userId]
-  );
-  return res.json({ user: publicUser(updatedRows[0]) });
+  const updated = await getDocById("users", userId);
+  if (className === undefined) {
+    const cls = updated.class_id === null || updated.class_id === undefined
+      ? null
+      : await getDocById("classes", updated.class_id);
+    className = cls ? cls.name : null;
+  }
+  return res.json({ user: publicUser({ ...updated, class_name: className }) });
 }));
 
 router.post("/users/:id/reset-password", asyncHandler(async (req, res) => {
   const userId = idSchema.parse(req.params.id);
-  const rows = await query("SELECT id, name, role, username FROM users WHERE id = ? LIMIT 1", [userId]);
-  const target = rows[0];
+  const target = await getDocById("users", userId);
   if (!target) return res.status(404).json({ error: "User not found." });
   if (target.role === "admin") {
     return res.status(403).json({ error: "Admin passwords can only be changed from the signed-in account or the command line." });
@@ -280,16 +295,13 @@ router.post("/users/:id/reset-password", asyncHandler(async (req, res) => {
 
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
-  await query(
-    `UPDATE users
-        SET password_hash = ?,
-            must_change_password = 1,
-            token_version = token_version + 1,
-            failed_login_attempts = 0,
-            locked_until = NULL
-      WHERE id = ?`,
-    [passwordHash, userId]
-  );
+  await updateDocById("users", userId, {
+    password_hash: passwordHash,
+    must_change_password: true,
+    token_version: Number(target.token_version || 0) + 1,
+    failed_login_attempts: 0,
+    locked_until: null
+  });
 
   await logActivity(req.user, `Reset password for ${target.name} (${target.username})`);
   return res.json({ temporaryPassword });
@@ -301,43 +313,32 @@ router.delete("/users/:id", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "You cannot delete your own account." });
   }
 
-  const rows = await query("SELECT id, name, username, role FROM users WHERE id = ? LIMIT 1", [userId]);
-  const target = rows[0];
+  const target = await getDocById("users", userId);
   if (!target) return res.status(404).json({ error: "User not found." });
   if (target.role === "admin") {
     return res.status(403).json({ error: "Admin accounts are managed from the command line." });
   }
 
-  const counts = await query(
-    `SELECT
-       (SELECT COUNT(*) FROM quiz_attempts WHERE student_id = ?) AS attempts,
-       (SELECT COUNT(*) FROM questions WHERE created_by = ?) AS questions,
-       (SELECT COUNT(*) FROM quizzes WHERE teacher_id = ?) AS quizzes`,
-    [userId, userId, userId]
-  );
-  const attemptCount = Number(counts[0].attempts);
-  const questionCount = Number(counts[0].questions);
-  const quizCount = Number(counts[0].quizzes);
+  const [attempts, questions, quizzes] = await Promise.all([
+    listWhere("attempts", "student_id", userId),
+    listWhere("questions", "created_by", userId),
+    listWhere("quizzes", "teacher_id", userId)
+  ]);
 
-  if (attemptCount > 0 || questionCount > 0 || quizCount > 0) {
+  if (attempts.length > 0 || questions.length > 0 || quizzes.length > 0) {
     return res.status(409).json({
-      error: `Cannot delete "${target.name}": the account still has ${attemptCount} attempt(s), ${questionCount} question(s) and ${quizCount} quiz(zes). Suspend the account instead.`
+      error: `Cannot delete "${target.name}": the account still has ${attempts.length} attempt(s), ${questions.length} question(s) and ${quizzes.length} quiz(zes). Suspend the account instead.`
     });
   }
 
-  await query("DELETE FROM users WHERE id = ?", [userId]);
+  await deleteUser(userId);
   await logActivity(req.user, `Deleted ${target.role} account "${target.name}" (${target.username})`);
   return res.json({ ok: true });
 }));
 
 router.put("/settings", asyncHandler(async (req, res) => {
   const input = settingsSchema.parse(req.body);
-  await query(
-    `INSERT INTO settings (setting_key, setting_value)
-     VALUES ('default_quiz_minutes', ?)
-     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-    [String(input.defaultQuizMinutes)]
-  );
+  await setSetting("default_quiz_minutes", String(input.defaultQuizMinutes));
   await logActivity(req.user, `Updated default quiz duration to ${input.defaultQuizMinutes} minutes`);
   return res.json({ settings: input });
 }));

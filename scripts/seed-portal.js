@@ -3,13 +3,22 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
-const { pool, query, withTransaction } = require("../server/db");
-const { applySchema } = require("../server/schema");
+const {
+  listAll,
+  listWhere,
+  findUserByUsername,
+  findClassByName,
+  createClass,
+  createUser,
+  createQuizWithItems,
+  insertDoc,
+  close
+} = require("../server/fdb");
 const { hashPassword } = require("../server/security");
 const { generateTemporaryPassword, logActivity } = require("../server/utils");
 const { nameSchema, usernameSchema } = require("../server/validation");
 
-const HTML_PATH = path.join(__dirname, "..", "index.html");
+const SOURCE_PATH = path.join(__dirname, "..", "questions-source.html");
 
 function parseArgs(argv) {
   const options = {
@@ -48,8 +57,8 @@ function extractClasses(html) {
 }
 
 async function ensureAdmin(created) {
-  const existingAdmin = await query("SELECT id, name, username FROM users WHERE role = 'admin' ORDER BY id LIMIT 1");
-  if (existingAdmin[0]) return existingAdmin[0];
+  const admins = (await listWhere("users", "role", "admin")).sort((a, b) => a.id - b.id);
+  if (admins[0]) return admins[0];
 
   const name = (process.env.ADMIN_NAME || "Portal Administrator").trim();
   const username = (process.env.ADMIN_USERNAME || "admin").trim();
@@ -58,20 +67,23 @@ async function ensureAdmin(created) {
   if (!nameResult.success) throw new Error(nameResult.error.issues[0].message);
   if (!usernameResult.success) throw new Error(usernameResult.error.issues[0].message);
 
-  const taken = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [username]);
-  if (taken.length) throw new Error(`Username "${username}" is already in use by a non-admin account.`);
+  if (await findUserByUsername(username)) {
+    throw new Error(`Username "${username}" is already in use by a non-admin account.`);
+  }
 
   const temporaryPassword = process.env.ADMIN_PASSWORD || generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
-  const result = await query(
-    `INSERT INTO users (name, username, password_hash, role, must_change_password)
-     VALUES (?, ?, ?, 'admin', 1)`,
-    [name, username, passwordHash]
-  );
-  await logActivity(null, `Created admin account "${name}" (${username})`);
+  const id = await createUser({
+    name,
+    username,
+    password_hash: passwordHash,
+    role: "admin",
+    must_change_password: true
+  });
 
+  await logActivity(null, `Created admin account "${name}" (${username})`);
   created.credentials.push({ role: "Admin", name, username, password: temporaryPassword });
-  return { id: result.insertId, name, username };
+  return { id, name, username };
 }
 
 async function ensureClasses(html, created) {
@@ -79,84 +91,75 @@ async function ensureClasses(html, created) {
   const classes = [];
 
   for (const name of names) {
-    const rows = await query("SELECT id, name FROM classes WHERE name = ? LIMIT 1", [name]);
-    if (rows[0]) {
-      classes.push(rows[0]);
+    const existing = await findClassByName(name);
+    if (existing) {
+      classes.push(existing);
       continue;
     }
-    const result = await query("INSERT INTO classes (name) VALUES (?)", [name]);
+    const id = await createClass(name);
     await logActivity(null, `Created class ${name}`);
     created.classes += 1;
-    classes.push({ id: result.insertId, name });
+    classes.push({ id, name });
   }
 
   return classes;
 }
 
 async function ensureTeacher(created) {
-  const rows = await query(
-    "SELECT id, name, username FROM users WHERE role = 'teacher' AND active = 1 ORDER BY id LIMIT 1"
-  );
-  if (rows[0]) return rows[0];
+  const teachers = (await listWhere("users", "role", "teacher"))
+    .filter(user => user.active)
+    .sort((a, b) => a.id - b.id);
+  if (teachers[0]) return teachers[0];
 
   const name = (process.env.IMPORT_TEACHER_NAME || "GBAT Teacher").trim();
   const baseUsername = (process.env.IMPORT_TEACHER_USERNAME || "gbat.teacher").trim();
   let username = baseUsername;
   let suffix = 1;
-  while ((await query("SELECT id FROM users WHERE username = ? LIMIT 1", [username])).length) {
+  while (await findUserByUsername(username)) {
     suffix += 1;
     username = `${baseUsername}${suffix}`;
   }
 
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
-  const result = await query(
-    `INSERT INTO users (name, username, password_hash, role, must_change_password)
-     VALUES (?, ?, ?, 'teacher', 1)`,
-    [name, username, passwordHash]
-  );
+  const id = await createUser({
+    name,
+    username,
+    password_hash: passwordHash,
+    role: "teacher",
+    must_change_password: true
+  });
   await logActivity(null, `Created teacher account "${name}" (${username})`);
   created.credentials.push({ role: "Teacher", name, username, password: temporaryPassword });
-  return { id: result.insertId, name, username };
+  return { id, name, username };
 }
 
 async function ensureQuiz(teacher, cls, questions, options, created) {
-  const existing = await query(
-    `SELECT id FROM quizzes
-      WHERE title = ? AND class_id = ? AND is_deleted = 0
-      LIMIT 1`,
-    [options.quizTitle, cls.id]
+  const existing = (await listWhere("quizzes", "class_id", cls.id))
+    .filter(quiz => quiz.title === options.quizTitle && !quiz.is_deleted)
+    .sort((a, b) => a.id - b.id)[0];
+  if (existing) return existing;
+
+  const quizId = await createQuizWithItems(
+    {
+      title: options.quizTitle,
+      class_id: cls.id,
+      teacher_id: teacher.id,
+      minutes: options.minutes,
+      shuffle_questions: false,
+      is_open: true,
+      is_deleted: false,
+      created_at: new Date()
+    },
+    questions.map(question => ({
+      question_text: question.question_text,
+      options: question.options,
+      correct_index: question.correct_index,
+      solution: question.solution,
+      subject: question.subject || "General",
+      diagram_svg: question.diagram_svg || null
+    }))
   );
-  if (existing[0]) return existing[0];
-
-  const quizId = await withTransaction(async connection => {
-    const [result] = await connection.execute(
-      `INSERT INTO quizzes (title, class_id, teacher_id, minutes, is_open)
-       VALUES (?, ?, ?, ?, 1)`,
-      [options.quizTitle, cls.id, teacher.id, options.minutes]
-    );
-
-    for (let position = 0; position < questions.length; position += 1) {
-      const question = questions[position];
-      await connection.execute(
-        `INSERT INTO quiz_questions
-           (quiz_id, position, question_text, options_json, correct_index, solution, subject, diagram_svg)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          result.insertId,
-          position,
-          question.question_text,
-          question.options_json,
-          question.correct_index,
-          question.solution,
-          question.subject || "General",
-          question.diagram_svg
-        ]
-      );
-    }
-
-    return result.insertId;
-  });
 
   await logActivity(null, `Created quiz "${options.quizTitle}" for ${cls.name}`);
   created.quizzes += 1;
@@ -167,24 +170,31 @@ async function ensureDemoStudents(classes, created) {
   const results = [];
 
   for (const cls of classes) {
-    const suffix = cls.name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const suffix = String(cls.name).toLowerCase().replace(/[^a-z0-9]+/g, "");
     const username = `demo.${suffix}`;
     const name = `Demo Student - ${cls.name}`;
-    const existing = await query("SELECT id, username FROM users WHERE username = ? LIMIT 1", [username]);
-    if (existing[0]) {
+    if (await findUserByUsername(username)) {
       results.push({ className: cls.name, username, created: false });
       continue;
     }
 
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
-    await query(
-      `INSERT INTO users (name, username, password_hash, role, class_id, must_change_password)
-       VALUES (?, ?, ?, 'student', ?, 1)`,
-      [name, username, passwordHash, cls.id]
-    );
+    await createUser({
+      name,
+      username,
+      password_hash: passwordHash,
+      role: "student",
+      class_id: cls.id,
+      must_change_password: true
+    });
     await logActivity(null, `Created demo student account "${name}" (${username})`);
-    created.credentials.push({ role: `Student (${cls.name})`, name, username, password: temporaryPassword });
+    created.credentials.push({
+      role: `Student (${cls.name})`,
+      name,
+      username,
+      password: temporaryPassword
+    });
     results.push({ className: cls.name, username, created: true });
   }
 
@@ -193,10 +203,14 @@ async function ensureDemoStudents(classes, created) {
 
 async function ensureWelcomeAnnouncement(teacher, created) {
   const text = "Welcome to the GBAT portal. Your diagnostic assessment is now open. Sign in with your username and temporary password.";
-  const existing = await query("SELECT id FROM announcements WHERE text = ? LIMIT 1", [text]);
-  if (existing[0]) return false;
+  const announcements = await listAll("announcements");
+  if (announcements.some(item => item.text === text)) return false;
 
-  await query("INSERT INTO announcements (author_id, text) VALUES (?, ?)", [teacher.id, text]);
+  await insertDoc("announcements", {
+    author_id: teacher.id,
+    text,
+    created_at: new Date()
+  });
   await logActivity(null, "Posted the welcome announcement");
   created.announcements += 1;
   return true;
@@ -205,25 +219,19 @@ async function ensureWelcomeAnnouncement(teacher, created) {
 async function main(cliOptions, { quiet = false } = {}) {
   const options = { ...parseArgs([]), ...(cliOptions || parseArgs(process.argv.slice(2))) };
   const log = quiet ? () => {} : (...args) => console.log(...args);
-  await applySchema();
   if (!Number.isInteger(options.minutes) || options.minutes < 1 || options.minutes > 240) {
     throw new Error("Quiz duration must be between 1 and 240 minutes.");
   }
 
-  const html = fs.readFileSync(HTML_PATH, "utf8");
+  const html = fs.readFileSync(SOURCE_PATH, "utf8");
   const created = { credentials: [], classes: 0, quizzes: 0, announcements: 0 };
 
   const admin = await ensureAdmin(created);
   const classes = await ensureClasses(html, created);
   const teacher = await ensureTeacher(created);
 
-  const questionRows = await query(
-    `SELECT id, question_text, options_json, correct_index, solution, subject, diagram_svg
-       FROM questions
-      WHERE created_by = ?
-      ORDER BY id`,
-    [teacher.id]
-  );
+  const questionRows = (await listWhere("questions", "created_by", teacher.id))
+    .sort((a, b) => a.id - b.id);
   if (!questionRows.length) {
     throw new Error("The teacher has no questions. Run `npm run import-html` first.");
   }
@@ -276,7 +284,7 @@ if (require.main === module) {
       process.exitCode = 1;
     })
     .finally(async () => {
-      await pool.end();
+      await close();
     });
 }
 

@@ -1,6 +1,11 @@
 "use strict";
 
-const { query } = require("./db");
+const {
+  listClasses,
+  listWhere,
+  findUserByUsername,
+  createUser
+} = require("./fdb");
 const { hashPassword } = require("./security");
 const { logActivity } = require("./utils");
 const { nameSchema, usernameSchema } = require("./validation");
@@ -19,8 +24,8 @@ async function uniqueUsername(base) {
   let candidate = base;
   let suffix = 2;
   while (true) {
-    const rows = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [candidate]);
-    if (!rows.length) return candidate;
+    const existing = await findUserByUsername(candidate);
+    if (!existing) return candidate;
     const text = String(suffix);
     candidate = `${base.slice(0, 80 - text.length)}${text}`;
     suffix += 1;
@@ -29,8 +34,8 @@ async function uniqueUsername(base) {
 
 async function importStudentsFromWorkbook(buffer, actor) {
   const rows = await readStudentRows(buffer);
-  const classRows = await query("SELECT id, name FROM classes ORDER BY name");
-  const classMap = new Map(classRows.map(cls => [classKey(cls.name), cls]));
+  const classes = await listClasses();
+  const classMap = new Map(classes.map(cls => [classKey(cls.name), cls]));
 
   const created = [];
   const skipped = [];
@@ -58,13 +63,11 @@ async function importStudentsFromWorkbook(buffer, actor) {
       continue;
     }
 
-    const duplicate = await query(
-      `SELECT id FROM users
-        WHERE role = 'student' AND class_id = ? AND LOWER(name) = LOWER(?)
-        LIMIT 1`,
-      [cls.id, name]
+    const classmates = await listWhere("users", "class_id", cls.id);
+    const duplicate = classmates.some(user =>
+      user.role === "student" && String(user.name).toLowerCase() === name.toLowerCase()
     );
-    if (duplicate.length) {
+    if (duplicate) {
       skipped.push({ rowNumber: row.rowNumber, name, reason: "Already exists in this class." });
       continue;
     }
@@ -76,8 +79,7 @@ async function importStudentsFromWorkbook(buffer, actor) {
         failed.push({ rowNumber: row.rowNumber, name, reason: usernameResult.error.issues[0].message });
         continue;
       }
-      const existing = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [username]);
-      if (existing.length) {
+      if (await findUserByUsername(username)) {
         failed.push({ rowNumber: row.rowNumber, name, reason: `Username "${username}" is already in use.` });
         continue;
       }
@@ -88,11 +90,20 @@ async function importStudentsFromWorkbook(buffer, actor) {
     const password = temporaryPassword(row.firstName, row.lastName);
     const passwordHash = await hashPassword(password);
 
-    await query(
-      `INSERT INTO users (name, username, password_hash, role, class_id, must_change_password)
-       VALUES (?, ?, ?, 'student', ?, 1)`,
-      [name, username, passwordHash, cls.id]
-    );
+    await createUser({
+      name,
+      username,
+      password_hash: passwordHash,
+      role: "student",
+      class_id: cls.id,
+      active: true,
+      must_change_password: true,
+      failed_login_attempts: 0,
+      locked_until: null,
+      token_version: 0,
+      last_login_at: null,
+      created_at: new Date()
+    });
 
     created.push({
       rowNumber: row.rowNumber,

@@ -1,7 +1,21 @@
 "use strict";
 
 const express = require("express");
-const { query, withTransaction } = require("../db");
+const {
+  listWhere,
+  listWhereIn,
+  listClasses,
+  getDocById,
+  getManyByIds,
+  insertDoc,
+  updateDocById,
+  deleteDocById,
+  createQuizWithItems,
+  listQuizItems,
+  countQuizItems,
+  recentDocs,
+  getSetting
+} = require("../fdb");
 const { buildStudentTemplate } = require("../excel");
 const {
   asyncHandler,
@@ -24,7 +38,7 @@ function mapQuestion(row) {
   return {
     id: row.id,
     text: row.question_text,
-    options: parseOptions(row.options_json),
+    options: parseOptions(row.options),
     correctIndex: Number(row.correct_index),
     solution: row.solution,
     subject: row.subject || "General",
@@ -36,54 +50,32 @@ function mapQuestion(row) {
 }
 
 async function loadOwnedQuiz(quizId, teacherId) {
-  const rows = await query(
-    `SELECT q.id, q.title, q.class_id, q.teacher_id, q.minutes, q.shuffle_questions, q.is_open, q.created_at,
-            c.name AS class_name
-       FROM quizzes q
-       JOIN classes c ON c.id = q.class_id
-      WHERE q.id = ? AND q.teacher_id = ? AND q.is_deleted = 0
-      LIMIT 1`,
-    [quizId, teacherId]
-  );
-  return rows[0] || null;
+  const quiz = await getDocById("quizzes", quizId);
+  if (!quiz || quiz.is_deleted || Number(quiz.teacher_id) !== Number(teacherId)) return null;
+  const cls = await getDocById("classes", quiz.class_id);
+  return { ...quiz, class_name: cls ? cls.name : null };
 }
 
 async function buildQuizResults(quiz) {
-  const [roster, submissionRows, accuracyRows] = await Promise.all([
-    query(
-      `SELECT id, name, username
-         FROM users
-        WHERE role = 'student' AND class_id = ?
-        ORDER BY name`,
-      [quiz.class_id]
-    ),
-    query(
-      `SELECT s.id, s.student_id, s.mode, s.score, s.total, s.pct, s.submitted_at,
-              u.name AS student_name, u.username AS student_username
-         FROM submissions s
-         JOIN users u ON u.id = s.student_id
-        WHERE s.quiz_id = ?
-        ORDER BY s.pct DESC, s.submitted_at ASC`,
-      [quiz.id]
-    ),
-    query(
-      `SELECT qq.position, qq.question_text, qq.subject,
-              COUNT(sa.id) AS attempts,
-              COALESCE(SUM(sa.is_correct), 0) AS correct_count
-         FROM quiz_questions qq
-         LEFT JOIN submission_answers sa
-           ON sa.position = qq.position
-          AND sa.submission_id IN (SELECT id FROM submissions WHERE quiz_id = ?)
-        WHERE qq.quiz_id = ?
-        GROUP BY qq.id, qq.position, qq.question_text, qq.subject
-        ORDER BY qq.position`,
-      [quiz.id, quiz.id]
-    )
+  const [rosterAll, submissions, items] = await Promise.all([
+    listWhere("users", "class_id", quiz.class_id),
+    listWhere("submissions", "quiz_id", quiz.id),
+    listQuizItems(quiz.id)
   ]);
+
+  const roster = rosterAll
+    .filter(user => user.role === "student")
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const studentIds = [...new Set(submissions.map(submission => Number(submission.student_id)))];
+  const studentDocs = await getManyByIds("users", studentIds);
+  const studentNameMap = new Map(studentDocs.map(user => [Number(user.id), user]));
+
+  submissions.sort((a, b) => Number(b.pct) - Number(a.pct) || new Date(a.submitted_at) - new Date(b.submitted_at));
 
   const studentMap = new Map();
   for (const student of roster) {
-    studentMap.set(student.id, {
+    studentMap.set(Number(student.id), {
       studentId: student.id,
       name: student.name,
       username: student.username,
@@ -97,13 +89,14 @@ async function buildQuizResults(quiz) {
     });
   }
 
-  for (const submission of submissionRows) {
-    let entry = studentMap.get(submission.student_id);
+  for (const submission of submissions) {
+    let entry = studentMap.get(Number(submission.student_id));
     if (!entry) {
+      const doc = studentNameMap.get(Number(submission.student_id)) || {};
       entry = {
         studentId: submission.student_id,
-        name: submission.student_name,
-        username: submission.student_username,
+        name: doc.name || "Former student",
+        username: doc.username || "",
         attempts: 0,
         bestSubmissionId: null,
         bestPct: null,
@@ -112,7 +105,7 @@ async function buildQuizResults(quiz) {
         bestMode: null,
         lastAttemptAt: null
       };
-      studentMap.set(submission.student_id, entry);
+      studentMap.set(Number(submission.student_id), entry);
     }
     entry.attempts += 1;
     if (entry.bestPct === null || Number(submission.pct) > Number(entry.bestPct)) {
@@ -122,7 +115,7 @@ async function buildQuizResults(quiz) {
       entry.bestTotal = Number(submission.total);
       entry.bestMode = submission.mode;
     }
-    if (!entry.lastAttemptAt || submission.submitted_at > entry.lastAttemptAt) {
+    if (!entry.lastAttemptAt || new Date(submission.submitted_at) > new Date(entry.lastAttemptAt)) {
       entry.lastAttemptAt = submission.submitted_at;
     }
   }
@@ -137,6 +130,17 @@ async function buildQuizResults(quiz) {
     : 0;
   const highest = attempted.length ? Math.max(...attempted.map(student => student.bestPct)) : 0;
   const lowest = attempted.length ? Math.min(...attempted.map(student => student.bestPct)) : 0;
+
+  const tally = new Map();
+  for (const submission of submissions) {
+    for (const answer of submission.answers || []) {
+      const key = Number(answer.position);
+      const bucket = tally.get(key) || { attempts: 0, correct: 0 };
+      bucket.attempts += 1;
+      if (answer.is_correct) bucket.correct += 1;
+      tally.set(key, bucket);
+    }
+  }
 
   return {
     quiz: {
@@ -156,23 +160,22 @@ async function buildQuizResults(quiz) {
       highest,
       lowest
     },
-    accuracy: accuracyRows.map(row => {
-      const attempts = Number(row.attempts);
-      const correct = Number(row.correct_count);
+    accuracy: items.map(item => {
+      const bucket = tally.get(Number(item.position)) || { attempts: 0, correct: 0 };
       return {
-        position: Number(row.position),
-        text: row.question_text,
-        subject: row.subject || "General",
-        attempts,
-        correct,
-        accuracy: attempts ? Math.round((correct / attempts) * 100) : 0
+        position: Number(item.position),
+        text: item.question_text,
+        subject: item.subject || "General",
+        attempts: bucket.attempts,
+        correct: bucket.correct,
+        accuracy: bucket.attempts ? Math.round((bucket.correct / bucket.attempts) * 100) : 0
       };
     })
   };
 }
 
 router.get("/students/template.xlsx", asyncHandler(async (req, res) => {
-  const classes = await query("SELECT name FROM classes ORDER BY name");
+  const classes = await listClasses();
   const buffer = await buildStudentTemplate(classes.map(cls => cls.name));
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", "attachment; filename=\"gbat-student-import-template.xlsx\"");
@@ -180,134 +183,153 @@ router.get("/students/template.xlsx", asyncHandler(async (req, res) => {
 }));
 
 router.get("/bootstrap", asyncHandler(async (req, res) => {
-  const [questions, quizzes, classes, submissions, announcements, statsRows, hardestRows, settingsRows] = await Promise.all([
-    query(
-      `SELECT q.*, u.name AS creator_name
-         FROM questions q
-         JOIN users u ON u.id = q.created_by
-        WHERE q.created_by = ?
-        ORDER BY q.id DESC`,
-      [req.user.id]
-    ),
-    query(
-      `SELECT q.id, q.title, q.class_id, c.name AS class_name, q.minutes, q.shuffle_questions, q.is_open, q.created_at,
-              (SELECT COUNT(*) FROM quiz_questions qq WHERE qq.quiz_id = q.id) AS question_count
-         FROM quizzes q
-         JOIN classes c ON c.id = q.class_id
-        WHERE q.teacher_id = ? AND q.is_deleted = 0
-        ORDER BY q.id DESC`,
-      [req.user.id]
-    ),
-    query("SELECT id, name FROM classes ORDER BY name"),
-    query(
-      `SELECT s.id, s.quiz_id, s.mode, s.score, s.total, s.pct, s.submitted_at,
-              q.title AS quiz_title, c.name AS class_name,
-              u.name AS student_name, u.username AS student_username
-         FROM submissions s
-         JOIN quizzes q ON q.id = s.quiz_id
-         JOIN classes c ON c.id = q.class_id
-         JOIN users u ON u.id = s.student_id
-        WHERE q.teacher_id = ?
-        ORDER BY s.submitted_at DESC
-        LIMIT 1000`,
-      [req.user.id]
-    ),
-    query(
-      `SELECT a.id, a.text, a.created_at, a.author_id, u.name AS author_name
-         FROM announcements a
-         JOIN users u ON u.id = a.author_id
-        ORDER BY a.id DESC
-        LIMIT 50`
-    ),
-    query(
-      `SELECT COUNT(*) AS submissions, ROUND(AVG(s.pct)) AS average, MAX(s.pct) AS highest
-         FROM submissions s
-         JOIN quizzes q ON q.id = s.quiz_id
-        WHERE q.teacher_id = ?`,
-      [req.user.id]
-    ),
-    query(
-      `SELECT qq.question_text, q.title AS quiz_title,
-              COUNT(sa.id) AS attempts,
-              COALESCE(SUM(sa.is_correct), 0) AS correct_count
-         FROM quiz_questions qq
-         JOIN quizzes q ON q.id = qq.quiz_id AND q.teacher_id = ?
-         JOIN submissions s ON s.quiz_id = q.id
-         JOIN submission_answers sa ON sa.submission_id = s.id AND sa.position = qq.position
-        GROUP BY qq.id, qq.question_text, q.title
-       HAVING attempts > 0
-        ORDER BY (SUM(sa.is_correct) / COUNT(sa.id)) ASC, attempts DESC
-        LIMIT 1`,
-      [req.user.id]
-    ),
-    query("SELECT setting_value FROM settings WHERE setting_key = 'default_quiz_minutes' LIMIT 1")
+  const teacherId = req.user.id;
+
+  const [questions, ownedQuizzes, classes, announcements, defaultMinutes] = await Promise.all([
+    listWhere("questions", "created_by", teacherId),
+    listWhere("quizzes", "teacher_id", teacherId),
+    listClasses(),
+    recentDocs("announcements", 50),
+    getSetting("default_quiz_minutes")
   ]);
 
-  const hardest = hardestRows[0];
-  const defaultQuizMinutes = Number(settingsRows[0] ? settingsRows[0].setting_value : 45);
+  const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+  const quizzes = ownedQuizzes
+    .filter(quiz => !quiz.is_deleted)
+    .sort((a, b) => Number(b.id) - Number(a.id));
+  const quizIds = quizzes.map(quiz => Number(quiz.id));
+
+  const [questionCounts, submissions] = await Promise.all([
+    Promise.all(quizIds.map(id => countQuizItems(id))),
+    listWhereIn("submissions", "quiz_id", quizIds)
+  ]);
+  const questionCountMap = new Map(quizIds.map((id, index) => [id, questionCounts[index]]));
+
+  submissions.sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+  const recentSubmissions = submissions.slice(0, 1000);
+
+  const quizMap = new Map(quizzes.map(quiz => [Number(quiz.id), quiz]));
+  const peopleIds = [
+    ...new Set([
+      ...recentSubmissions.map(submission => Number(submission.student_id)),
+      ...announcements.map(item => Number(item.author_id))
+    ])
+  ];
+  const people = await getManyByIds("users", peopleIds);
+  const peopleMap = new Map(people.map(user => [Number(user.id), user]));
+
+  const statsSubmissions = submissions.length;
+  const statsAverage = statsSubmissions
+    ? Math.round(submissions.reduce((sum, row) => sum + Number(row.pct || 0), 0) / statsSubmissions)
+    : 0;
+  const statsHighest = statsSubmissions ? Math.max(...submissions.map(row => Number(row.pct || 0))) : 0;
+
+  // Hardest question across this teacher's quizzes (answers are embedded in
+  // each submission document).
+  const itemText = new Map();
+  for (const quizId of quizIds) {
+    const items = await listQuizItems(quizId);
+    for (const item of items) {
+      itemText.set(`${quizId}:${Number(item.position)}`, item);
+    }
+  }
+  const tally = new Map();
+  for (const submission of submissions) {
+    for (const answer of submission.answers || []) {
+      const key = `${Number(submission.quiz_id)}:${Number(answer.position)}`;
+      const bucket = tally.get(key) || { attempts: 0, correct: 0 };
+      bucket.attempts += 1;
+      if (answer.is_correct) bucket.correct += 1;
+      tally.set(key, bucket);
+    }
+  }
+  let hardest = null;
+  for (const [key, bucket] of tally) {
+    if (!bucket.attempts) continue;
+    const item = itemText.get(key);
+    if (!item) continue;
+    const candidate = {
+      text: item.question_text,
+      quizTitle: quizMap.get(Number(key.split(":")[0]))?.title || "",
+      attempts: bucket.attempts,
+      accuracy: Math.round((bucket.correct / bucket.attempts) * 100)
+    };
+    if (
+      !hardest ||
+      candidate.accuracy < hardest.accuracy ||
+      (candidate.accuracy === hardest.accuracy && candidate.attempts > hardest.attempts)
+    ) {
+      hardest = candidate;
+    }
+  }
 
   res.json({
-    questions: questions.map(mapQuestion),
+    questions: questions
+      .sort((a, b) => Number(b.id) - Number(a.id))
+      .map(question => mapQuestion({ ...question, creator_name: req.user.name })),
     quizzes: quizzes.map(quiz => ({
       id: quiz.id,
       title: quiz.title,
       classId: quiz.class_id,
-      className: quiz.class_name,
+      className: classMap.get(Number(quiz.class_id)) || null,
       minutes: Number(quiz.minutes),
       shuffleQuestions: toBoolean(quiz.shuffle_questions),
       isOpen: toBoolean(quiz.is_open),
-      questionCount: Number(quiz.question_count),
+      questionCount: questionCountMap.get(Number(quiz.id)) || 0,
       createdAt: quiz.created_at
     })),
-    classes,
-    submissions: submissions.map(submission => ({
-      id: submission.id,
-      quizId: submission.quiz_id,
-      quizTitle: submission.quiz_title,
-      className: submission.class_name,
-      mode: submission.mode,
-      score: Number(submission.score),
-      total: Number(submission.total),
-      pct: Number(submission.pct),
-      submittedAt: submission.submitted_at,
-      studentName: submission.student_name,
-      studentUsername: submission.student_username
-    })),
+    classes: classes.map(cls => ({ id: cls.id, name: cls.name })),
+    submissions: recentSubmissions.map(submission => {
+      const student = peopleMap.get(Number(submission.student_id)) || {};
+      const quiz = quizMap.get(Number(submission.quiz_id)) || {};
+      return {
+        id: submission.id,
+        quizId: submission.quiz_id,
+        quizTitle: quiz.title || "",
+        className: classMap.get(Number(submission.class_id)) || null,
+        mode: submission.mode,
+        score: Number(submission.score),
+        total: Number(submission.total),
+        pct: Number(submission.pct),
+        submittedAt: submission.submitted_at,
+        studentName: student.name || "Former student",
+        studentUsername: student.username || ""
+      };
+    }),
     announcements: announcements.map(item => ({
       id: item.id,
       text: item.text,
       authorId: item.author_id,
-      authorName: item.author_name,
+      authorName: (peopleMap.get(Number(item.author_id)) || {}).name || "Unknown",
       createdAt: item.created_at
     })),
     stats: {
-      submissions: Number(statsRows[0].submissions),
-      average: Number(statsRows[0].average || 0),
-      highest: Number(statsRows[0].highest || 0)
+      submissions: statsSubmissions,
+      average: statsAverage,
+      highest: statsHighest
     },
-    hardestQuestion: hardest
-      ? {
-          text: hardest.question_text,
-          quizTitle: hardest.quiz_title,
-          attempts: Number(hardest.attempts),
-          accuracy: Math.round((Number(hardest.correct_count) / Number(hardest.attempts)) * 100)
-        }
-      : null,
-    settings: { defaultQuizMinutes }
+    hardestQuestion: hardest,
+    settings: { defaultQuizMinutes: Number(defaultMinutes || 45) }
   });
 }));
 
 router.post("/questions", asyncHandler(async (req, res) => {
   const input = questionCreateSchema.parse(req.body);
-  const result = await query(
-    `INSERT INTO questions (question_text, options_json, correct_index, solution, subject, created_by)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [input.questionText, JSON.stringify(input.options), input.correctIndex, input.solution, input.subject, req.user.id]
-  );
+  const questionId = await insertDoc("questions", {
+    question_text: input.questionText,
+    options: input.options,
+    correct_index: input.correctIndex,
+    solution: input.solution,
+    subject: input.subject,
+    diagram_svg: null,
+    created_by: req.user.id,
+    created_at: new Date(),
+    updated_at: new Date()
+  });
   await logActivity(req.user, "Added a question to the bank");
   return res.status(201).json({
     question: {
-      id: result.insertId,
+      id: questionId,
       text: input.questionText,
       options: input.options,
       correctIndex: input.correctIndex,
@@ -322,13 +344,12 @@ router.post("/questions", asyncHandler(async (req, res) => {
 
 router.delete("/questions/:id", asyncHandler(async (req, res) => {
   const questionId = idSchema.parse(req.params.id);
-  const rows = await query("SELECT id, created_by FROM questions WHERE id = ? LIMIT 1", [questionId]);
-  const target = rows[0];
+  const target = await getDocById("questions", questionId);
   if (!target) return res.status(404).json({ error: "Question not found." });
-  if (target.created_by !== req.user.id) {
+  if (Number(target.created_by) !== Number(req.user.id)) {
     return res.status(403).json({ error: "You can only delete questions that you created." });
   }
-  await query("DELETE FROM questions WHERE id = ?", [questionId]);
+  await deleteDocById("questions", questionId);
   await logActivity(req.user, "Deleted a question from the bank");
   return res.json({ ok: true });
 }));
@@ -343,6 +364,10 @@ function shufflePositions(positions) {
 }
 
 function parseQuestionOrder(value, fallback) {
+  if (Array.isArray(value)) {
+    const positions = value.map(Number).filter(Number.isInteger);
+    return positions.length ? positions : fallback;
+  }
   if (!value) return fallback;
   try {
     const parsed = JSON.parse(value);
@@ -357,52 +382,43 @@ function parseQuestionOrder(value, fallback) {
 router.post("/quizzes", asyncHandler(async (req, res) => {
   const input = quizCreateSchema.parse(req.body);
 
-  const classRows = await query("SELECT id, name FROM classes WHERE id = ? LIMIT 1", [input.classId]);
-  if (!classRows[0]) return res.status(400).json({ error: "Class not found." });
+  const cls = await getDocById("classes", input.classId);
+  if (!cls) return res.status(400).json({ error: "Class not found." });
 
-  const placeholders = input.questionIds.map(() => "?").join(", ");
-  const questionRows = await query(
-    `SELECT id, question_text, options_json, correct_index, solution, subject, diagram_svg
-       FROM questions
-      WHERE created_by = ? AND id IN (${placeholders})`,
-    [req.user.id, ...input.questionIds]
+  const questionDocs = await getManyByIds("questions", input.questionIds);
+  const questionMap = new Map(
+    questionDocs
+      .filter(question => Number(question.created_by) === Number(req.user.id))
+      .map(question => [Number(question.id), question])
   );
-  const questionMap = new Map(questionRows.map(row => [row.id, row]));
 
-  const ordered = input.questionIds.map(id => questionMap.get(id));
+  const ordered = input.questionIds.map(id => questionMap.get(Number(id)));
   if (ordered.some(row => !row)) {
     return res.status(400).json({ error: "One or more selected questions no longer exist." });
   }
 
-  const quizId = await withTransaction(async connection => {
-    const [result] = await connection.execute(
-      `INSERT INTO quizzes (title, class_id, teacher_id, minutes, shuffle_questions, is_open)
-       VALUES (?, ?, ?, ?, ?, 1)`,
-      [input.title, input.classId, req.user.id, input.minutes, input.shuffleQuestions ? 1 : 0]
-    );
+  const quizId = await createQuizWithItems(
+    {
+      title: input.title,
+      class_id: input.classId,
+      teacher_id: req.user.id,
+      minutes: input.minutes,
+      shuffle_questions: Boolean(input.shuffleQuestions),
+      is_open: true,
+      is_deleted: false,
+      created_at: new Date()
+    },
+    ordered.map(question => ({
+      question_text: question.question_text,
+      options: parseOptions(question.options),
+      correct_index: Number(question.correct_index),
+      solution: question.solution,
+      subject: question.subject || "General",
+      diagram_svg: question.diagram_svg || null
+    }))
+  );
 
-    for (let position = 0; position < ordered.length; position += 1) {
-      const question = ordered[position];
-      await connection.execute(
-        `INSERT INTO quiz_questions
-           (quiz_id, position, question_text, options_json, correct_index, solution, subject, diagram_svg)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          result.insertId,
-          position,
-          question.question_text,
-          question.options_json,
-          question.correct_index,
-          question.solution,
-          question.subject || "General",
-          question.diagram_svg
-        ]
-      );
-    }
-    return result.insertId;
-  });
-
-  await logActivity(req.user, `Created quiz "${input.title}" for ${classRows[0].name}`);
+  await logActivity(req.user, `Created quiz "${input.title}" for ${cls.name}`);
   return res.status(201).json({
     quiz: { id: quizId, title: input.title, classId: input.classId, minutes: input.minutes, shuffleQuestions: input.shuffleQuestions },
     id: quizId,
@@ -419,37 +435,32 @@ router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
   const quiz = await loadOwnedQuiz(quizId, req.user.id);
   if (!quiz) return res.status(404).json({ error: "Quiz not found." });
 
-  const updates = [];
-  const params = [];
+  const patch = {};
   const actions = [];
 
   if (input.isOpen !== undefined) {
-    updates.push("is_open = ?");
-    params.push(input.isOpen ? 1 : 0);
+    patch.is_open = Boolean(input.isOpen);
     actions.push(`${input.isOpen ? "Opened" : "Closed"} quiz "${quiz.title}"`);
   }
   if (input.shuffleQuestions !== undefined) {
-    const questionOrder = await query(
-      "SELECT id, question_order_json FROM quiz_attempts WHERE quiz_id = ? AND status = 'in_progress'",
-      [quizId]
-    );
-    const naturalOrder = Array.from({ length: Number((await query("SELECT COUNT(*) AS count FROM quiz_questions WHERE quiz_id = ?", [quizId]))[0].count || 0) }, (_, index) => index);
+    const inProgress = (await listWhere("attempts", "quiz_id", quizId))
+      .filter(attempt => attempt.status === "in_progress");
+    const itemCount = await countQuizItems(quizId);
+    const naturalOrder = Array.from({ length: itemCount }, (_, index) => index);
 
-    for (const attempt of questionOrder) {
-      const currentOrder = parseQuestionOrder(attempt.question_order_json, naturalOrder);
+    for (const attempt of inProgress) {
+      const currentOrder = parseQuestionOrder(attempt.question_order, naturalOrder);
       const nextOrder = input.shuffleQuestions ? shufflePositions(naturalOrder) : naturalOrder;
       if (JSON.stringify(currentOrder) !== JSON.stringify(nextOrder)) {
-        await query("UPDATE quiz_attempts SET question_order_json = ? WHERE id = ?", [JSON.stringify(nextOrder), attempt.id]);
+        await updateDocById("attempts", attempt.id, { question_order: nextOrder });
       }
     }
 
-    updates.push("shuffle_questions = ?");
-    params.push(input.shuffleQuestions ? 1 : 0);
+    patch.shuffle_questions = Boolean(input.shuffleQuestions);
     actions.push(`${input.shuffleQuestions ? "Enabled" : "Disabled"} question shuffling for "${quiz.title}"`);
   }
 
-  params.push(quizId);
-  await query(`UPDATE quizzes SET ${updates.join(", ")} WHERE id = ?`, params);
+  await updateDocById("quizzes", quizId, patch);
   for (const action of actions) await logActivity(req.user, action);
   return res.json({
     isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen,
@@ -470,7 +481,7 @@ router.delete("/quizzes/:id", asyncHandler(async (req, res) => {
   const quiz = await loadOwnedQuiz(quizId, req.user.id);
   if (!quiz) return res.status(404).json({ error: "Quiz not found." });
 
-  await query("UPDATE quizzes SET is_deleted = 1, is_open = 0 WHERE id = ?", [quizId]);
+  await updateDocById("quizzes", quizId, { is_deleted: true, is_open: false });
   await logActivity(req.user, `Archived quiz "${quiz.title}"`);
   return res.json({ ok: true });
 }));
@@ -515,14 +526,15 @@ router.get("/quizzes/:id/results.csv", asyncHandler(async (req, res) => {
 
 router.post("/announcements", asyncHandler(async (req, res) => {
   const input = announcementCreateSchema.parse(req.body);
-  const result = await query(
-    "INSERT INTO announcements (author_id, text) VALUES (?, ?)",
-    [req.user.id, input.text]
-  );
+  const announcementId = await insertDoc("announcements", {
+    author_id: req.user.id,
+    text: input.text,
+    created_at: new Date()
+  });
   await logActivity(req.user, "Posted an announcement");
   return res.status(201).json({
     announcement: {
-      id: result.insertId,
+      id: announcementId,
       text: input.text,
       authorName: req.user.name,
       createdAt: new Date().toISOString()
@@ -532,13 +544,12 @@ router.post("/announcements", asyncHandler(async (req, res) => {
 
 router.delete("/announcements/:id", asyncHandler(async (req, res) => {
   const announcementId = idSchema.parse(req.params.id);
-  const rows = await query("SELECT id, author_id FROM announcements WHERE id = ? LIMIT 1", [announcementId]);
-  const target = rows[0];
+  const target = await getDocById("announcements", announcementId);
   if (!target) return res.status(404).json({ error: "Announcement not found." });
-  if (target.author_id !== req.user.id) {
+  if (Number(target.author_id) !== Number(req.user.id)) {
     return res.status(403).json({ error: "You can only delete announcements that you posted." });
   }
-  await query("DELETE FROM announcements WHERE id = ?", [announcementId]);
+  await deleteDocById("announcements", announcementId);
   await logActivity(req.user, "Deleted an announcement");
   return res.json({ ok: true });
 }));

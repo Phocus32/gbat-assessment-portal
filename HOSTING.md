@@ -1,176 +1,190 @@
-# Hosting the GBAT Assessment Portal
+# Host the GBAT Assessment Portal on Vercel + Firebase
 
-The app now runs as **one service with one SQLite database file**. There is no
-MySQL server to install and no manual `setup-db` / `create-admin` step. On first
-boot the app creates the schema, imports the sample questions from `index.html`,
-creates the classes, a teacher, a quiz per class and demo students, then prints
-all temporary passwords once.
+This setup uses:
 
-> **Node.js 22.13+ is required** because the app uses the built-in `node:sqlite`
-> module. Node 24 LTS is used in the Dockerfile.
+- **Vercel Hobby** (free, personal/school use) for the Express app and static files.
+- **Firebase Spark** (free, no card) with **Cloud Firestore** for all data.
 
----
-
-## 1. Choose a host
-
-### A. Render (easiest, ~US$7/month)
-
-`render.yaml` is already configured with a 1 GB persistent disk.
-
-1. Push this folder to GitHub / GitLab / Bitbucket.
-2. In Render: **New → Blueprint** → select the repository.
-3. Name the service and deploy. Render builds the `Dockerfile` and mounts the
-   disk at `/data`.
-4. Open `https://<your-service>.onrender.com/api/health` → `{"ok":true}`.
-5. In **Logs**, find the `GBAT portal is ready` block with the first-run
-   usernames and passwords. Sign in as `admin`, change the password, then set up
-   your real classes/students.
-
-> Render's free plan has **no persistent disk**. Use the paid Starter plan or
-> your data will disappear on restart. A disk-backed service runs one instance
-> and has a few seconds of downtime during deploys — that is expected.
-
-### B. Any VPS with Docker (DigitalOcean, Hetzner, your own server)
-
-```bash
-git clone <your-repo-url> gbat-quiz
-cd gbat-quiz
-docker compose up -d --build
-```
-
-- App: `http://YOUR_SERVER_IP:3000`
-- Data: Docker volume `gbat-assessment-portal_gbat-data`
-- Credentials: `docker compose logs gbat` (first run only)
-- Stop: `docker compose down` (data is kept)
-
-Put a reverse proxy (Caddy/Nginx) in front for HTTPS and set
-`APP_ORIGIN=https://your.domain` in `docker-compose.yml` when you do.
-
-### C. Fly.io (~US$2–4/month)
-
-```bash
-fly auth login
-fly apps create gbat-assessment-portal   # pick a unique name; edit fly.toml to match
-fly volumes create gbat_data --size 1 --region iad
-fly deploy
-fly logs        # first-run credentials
-```
-
-Keep **one machine**: a Fly volume can only be attached to one machine.
-`fly.toml` already keeps the machine warm so exam timers are not interrupted.
-
-### D. Railway (~US$5/month)
-
-1. **New Project → Deploy from GitHub repo**. Choose **Dockerfile** as the
-   builder (Railway will find the `Dockerfile` at the repo root).
-2. In the service settings add a **volume** mounted at `/data`, then set
-   `DATA_DIR=/data` and `SQLITE_PATH=/data/gbat.db`.
-3. Set the health check path to `/api/health`, generate a domain and open it.
-4. Read credentials from the deploy logs.
-
-> Railway's config-as-code (`railway.json`) is being retired for new services,
-> so treat the included file as a reference only. The volume **must** be added
-> in the dashboard or the database file will be lost on redeploy.
+There is no SQL database, no persistent disk, no Docker file and no server to
+keep alive. The browser never sees Firebase credentials; every request goes
+through the Vercel function, which uses the Firebase Admin SDK.
 
 ---
 
-## 2. First-run accounts
+## 1. Create the Firebase project
 
-On a brand-new database the startup log contains something like:
+1. Go to <https://console.firebase.google.com/> and choose **Add project**.
+2. Name it something like `gbat-assessment-portal`. Google Analytics is not needed.
+3. In the left menu choose **Build → Firestore Database → Create database**.
+4. Choose a region close to your users and start in **Production mode**.
+5. Open **Project settings → Service accounts**.
+6. Click **Generate new private key** and download the JSON file. Treat it like a password.
 
-```
-============================================================
- GBAT portal is ready
- Admin: admin / XnKK@n4uuw%HHjG6
- Teacher: gbat.teacher / *cg5pQ#zMpuSnP8M
- Student (SHS 1A): demo.shs1a / %uz9S9FYyor$&4nT
- Saved once to: /data/initial-credentials.txt
-============================================================
-```
-
-- Every account must change its password at first sign-in.
-- The same list is written to `<DATA_DIR>/initial-credentials.txt`. Delete that
-  file after you have saved the passwords.
-- To choose the admin password yourself, set `ADMIN_USERNAME` and
-  `ADMIN_PASSWORD` before the first boot.
-- To skip demo classes/quizzes/students, set `SEED_DEMO=false`. Only an admin
-  account will be created; you can import students from Excel in the dashboard.
+Keep the downloaded file safe. You will copy three values from it into Vercel.
 
 ---
 
-## 3. Configuration reference
+## 2. Import the GitHub repository into Vercel
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DB_DRIVER` | `sqlite` | `sqlite` (no setup) or `mysql` (existing deployments) |
-| `DATA_DIR` | `./data` | Folder for the database and generated JWT secret |
-| `SQLITE_PATH` | `<DATA_DIR>/gbat.db` | SQLite file — **must be on a persistent disk** |
-| `JWT_SECRET` | auto-generated into `DATA_DIR` | Signing key; if you set it, keep it stable |
-| `SEED_DEMO` | `true` | Set `false` for an empty portal with just an admin |
-| `ADMIN_USERNAME` | `admin` | First-run admin username |
-| `ADMIN_PASSWORD` | random | First-run admin password (otherwise printed once) |
-| `APP_ORIGIN` | `http://localhost:PORT` | Public URL (informational) |
-| `COOKIE_SECURE` | auto in production | Set `true` when serving HTTPS |
-| `TRUST_PROXY` | auto in production | Set `true` behind Render/Fly/Nginx |
-| `JWT_EXPIRES_IN` | `4h` | Session lifetime |
-| `AUTO_MIGRATE` | `true` | Apply schema on startup; set `false` to manage manually |
+1. Go to <https://vercel.com/new> and import `Phocus32/gbat-assessment-portal`.
+2. Do **not** change the build command or output directory.
+3. Add these environment variables before deploying:
 
-For MySQL mode, set `DB_DRIVER=mysql` and either `DATABASE_URL` or
-`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`. The original MySQL
-schema in `db/schema.sql` still works.
+| Name | Value |
+| --- | --- |
+| `FIREBASE_PROJECT_ID` | `project_id` from the service-account JSON |
+| `FIREBASE_CLIENT_EMAIL` | `client_email` from the JSON |
+| `FIREBASE_PRIVATE_KEY` | `private_key` from the JSON, including `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` |
+| `JWT_SECRET` | A random string of at least 32 characters (see below) |
+| `SEED_DEMO` | `false` recommended for a real deployment |
+
+Generate `JWT_SECRET` locally:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Alternative: instead of the three `FIREBASE_*` values, set
+`FIREBASE_SERVICE_ACCOUNT` to the entire JSON file as a single line. Do not set
+both forms at once.
+
+Optional first-boot variables:
+
+| Name | Purpose |
+| --- | --- |
+| `ADMIN_USERNAME` | Choose the first admin username (default `admin`) |
+| `ADMIN_PASSWORD` | Choose the first admin password; otherwise one is generated |
+| `ADMIN_NAME` | Display name for the first admin |
+| `IMPORT_TEACHER_USERNAME` | Username of the teacher who owns imported questions |
+| `IMPORT_TEACHER_NAME` | Display name for that teacher |
+
+> Firebase private keys often contain real line breaks. Vercel supports
+> multi-line values; paste them as-is. The app also accepts literal `\n`
+> characters. Never commit this JSON or put it in `public/`.
+
+4. Click **Deploy**. The first request runs the one-time bootstrap.
 
 ---
 
-## 4. Backups (important)
+## 3. First sign-in
 
-SQLite is a single file, so a backup is a file copy. When the app is running,
-copy the WAL files together:
+1. Open the deployment URL and check `/api/health` → `{"ok":true}`.
+2. Open the **Functions** log in Vercel and find the `GBAT portal is ready` block:
 
-```bash
-cp /path/to/data/gbat.db* /backup/location/
-```
+   ```text
+   GBAT portal is ready
+   admin / XnKK@n4uuw%HHjG6
+   ```
 
-Or use SQLite's online backup API from the host:
+3. Sign in with those credentials. Every generated account must change its
+   password at first sign-in.
+4. Change the admin password immediately.
 
-```bash
-node -e "const s=require('node:sqlite');(async()=>{await s.backup(new s.DatabaseSync('/path/to/data/gbat.db'),'/backup/gbat.db')})()"
-```
+If you set `ADMIN_PASSWORD`, that value is used only when the database is
+completely empty. Changing the environment variable later does not reset an
+existing password — use the admin dashboard instead.
 
-Restore by stopping the app, replacing `gbat.db`, `gbat.db-wal` and
-`gbat.db-shm`, then starting it again. Render takes daily disk snapshots; Fly
-takes volume snapshots. Keep your own copy as well.
+### Demo data
+
+With the default `SEED_DEMO=true`, the first boot also creates:
+
+- three classes from `questions-source.html`,
+- a teacher account owning the imported question bank,
+- one diagnostic quiz per class,
+- one demo student per class,
+- a welcome announcement.
+
+For a clean portal set `SEED_DEMO=false`; only the admin account is created.
+
+> Credentials are printed to the first boot log. Vercel's filesystem is
+> read-only/ephemeral, so they are not written to a file there. Save them as
+> soon as the deployment finishes.
 
 ---
 
-## 5. Day-two operations
+## 4. How the data is stored
+
+Firestore collections:
+
+| Collection | Contents |
+| --- | --- |
+| `users` | Admins, teachers and students (password hashes included) |
+| `classes` | Classes |
+| `questions` | Teacher question bank |
+| `quizzes` | Quiz metadata; questions are in `quizzes/{id}/items/{position}` |
+| `attempts` | Exam/practice attempts; answers are in `attempts/{id}/answers/{position}` |
+| `submissions` | Graded results with answers embedded |
+| `announcements`, `activity_logs`, `settings` | Supporting data |
+| `usernames`, `class_names`, `meta` | Uniqueness locks and ID counters |
+
+Numeric IDs are preserved from the old SQL version via a counter document.
+Exam deadlines are stored as timestamps, so Vercel cold starts do not reset a
+student's timer. A sleeping free service may take about a second to wake on the
+first request.
+
+Firestore's Spark free quota (at the time of writing) is 1 GiB stored,
+50,000 document reads/day and 20,000 writes/day. That is ample for a class quiz
+portal. If the project is inactive for 10 days, Firebase may archive the
+database; sign in or run the app occasionally to keep it active.
+
+---
+
+## 5. Local development and tests
+
+Install Java 21+ (the Firestore emulator is a Java jar), then:
 
 ```bash
-# Add a second admin (interactive on your machine)
-npm run create-admin
+npm ci
+npm test                 # starts the emulator automatically
+npm run emulators        # manual emulator for local app development
+```
 
-# Re-apply the schema / migrations
+With the manual emulator running, copy `.env.example` to `.env` and set:
+
+```dotenv
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
+FIREBASE_PROJECT_ID=gbat-test
+```
+
+Then run `npm start`. This points the app at the emulator instead of real
+Firebase data. The `.env` file is git-ignored.
+
+Useful scripts against the **real** Firebase project (set the same `FIREBASE_*`
+env vars on your machine):
+
+```bash
 npm run setup-db
-
-# Re-import questions or refresh demo content (idempotent)
 npm run import-html
 npm run seed-portal
-
-# Run the API test suite (uses a temporary SQLite file)
-npm test
+npm run create-admin
+npm run import-students -- students.csv --out credentials.csv
 ```
 
-When running against the deployed database from your laptop, pass the same
-`SQLITE_PATH`/`DB_*` environment variables; for SQLite it is simpler to copy the
-database file locally first.
+Protect or delete any generated credentials file.
 
 ---
 
-## 6. Troubleshooting
+## 6. Free-plan notes and limits
+
+- Vercel Hobby is for personal/non-commercial use. It includes HTTPS, custom
+  domains and 100 deployments/day.
+- The function timeout is set to 60 seconds in `vercel.json`; quiz requests are
+  far shorter than that. Vercel Hobby allows up to 300 seconds.
+- Firebase Spark requires no credit card. Do not enable Blaze unless you
+  explicitly want usage-based billing.
+- Keep the service account private. If it leaks, rotate it in Firebase
+  **Project settings → Service accounts** and update the Vercel variables.
+
+---
+
+## 7. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| `Cannot find module 'node:sqlite'` | Use Node 22.13+ (Node 24 recommended) |
-| Data resets after redeploy | The SQLite file is not on a persistent disk/volume |
-| Login loop or cookie rejected | Set `COOKIE_SECURE=true` and `TRUST_PROXY=true` behind HTTPS proxy |
-| `Missing required environment variable: DB_USER` | `DB_DRIVER` is set to `mysql`; switch it to `sqlite` or provide DB credentials |
-| No credentials in the log | They are only printed on the first boot; check `data/initial-credentials.txt` or reset the password from the admin dashboard |
+| `Set the JWT_SECRET environment variable in production` | Add `JWT_SECRET` in Vercel and redeploy |
+| `Firestore connection failed: 7 PERMISSION_DENIED` | Check `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY`; regenerate the key if needed |
+| Login loop or cookie rejected | Confirm deployment is HTTPS; `COOKIE_SECURE` is automatic in production |
+| `The service is starting up. Please retry in a moment.` | First cold boot is seeding; refresh after a few seconds and check the function logs |
+| No credentials in the log | They are printed only on the first boot; reset the password from the admin dashboard or run `npm run create-admin` |
+| Data disappeared | Confirm you are using the same Firebase project, not the emulator project `gbat-test` |
+| Tests fail to start | Install Java 21+ and allow the Firebase CLI to download the Firestore emulator jar once |

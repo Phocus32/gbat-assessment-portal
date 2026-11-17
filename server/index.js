@@ -2,11 +2,11 @@
 
 const app = require("./app");
 const config = require("./config");
-const { pool } = require("./db");
-const { bootstrap } = require("./bootstrap");
+const { close } = require("./fdb");
+const { ensureBootstrapped } = require("./bootstrap");
 
 async function start() {
-  await bootstrap();
+  await ensureBootstrapped();
 
   const server = app.listen(config.port, config.host, () => {
     console.log(`GBAT portal listening on http://${config.host}:${config.port}`);
@@ -16,7 +16,7 @@ async function start() {
     console.log(`${signal} received, shutting down.`);
     server.close(async () => {
       try {
-        await pool.end();
+        await close();
       } finally {
         process.exit(0);
       }

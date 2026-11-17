@@ -3,13 +3,20 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
-const { pool, query } = require("../server/db");
-const { applySchema } = require("../server/schema");
+const {
+  listWhere,
+  insertDoc,
+  updateDocById,
+  deleteDocById,
+  findUserByUsername,
+  createUser,
+  close
+} = require("../server/fdb");
 const { hashPassword } = require("../server/security");
 const { sanitizeSvg } = require("../server/svg");
 const { generateTemporaryPassword, logActivity } = require("../server/utils");
 
-const HTML_PATH = path.join(__dirname, "..", "index.html");
+const SOURCE_PATH = path.join(__dirname, "..", "questions-source.html");
 
 function parseArgs(argv) {
   const options = { owner: null, replace: false, dryRun: false };
@@ -31,13 +38,13 @@ function parseArgs(argv) {
 
 function extractQuestions(html) {
   const match = /const defaultQuestions = (\[[\s\S]*?\n\s*\]);/.exec(html);
-  if (!match) throw new Error("Could not find the defaultQuestions array in index.html.");
+  if (!match) throw new Error("Could not find the defaultQuestions array in questions-source.html.");
 
   let parsed;
   try {
     parsed = vm.runInNewContext(`(${match[1]})`, Object.create(null), { timeout: 1000 });
   } catch (error) {
-    throw new Error(`Could not parse the questions in index.html: ${error.message}`);
+    throw new Error(`Could not parse the questions in questions-source.html: ${error.message}`);
   }
 
   if (!Array.isArray(parsed) || !parsed.length) {
@@ -85,40 +92,48 @@ function extractQuestions(html) {
 
 async function findOrCreateTeacher(options) {
   if (options.owner) {
-    const rows = await query(
-      "SELECT id, name, username FROM users WHERE username = ? AND role = 'teacher' LIMIT 1",
-      [options.owner]
-    );
-    if (!rows[0]) throw new Error(`No teacher account found with username "${options.owner}".`);
-    return { teacher: rows[0], created: false, temporaryPassword: null };
+    const owner = await findUserByUsername(options.owner);
+    if (!owner || owner.role !== "teacher") {
+      throw new Error(`No teacher account found with username "${options.owner}".`);
+    }
+    return { teacher: owner, created: false, temporaryPassword: null };
   }
 
-  const existing = await query(
-    "SELECT id, name, username FROM users WHERE role = 'teacher' AND active = 1 ORDER BY id LIMIT 1"
-  );
-  if (existing[0]) return { teacher: existing[0], created: false, temporaryPassword: null };
+  const teachers = (await listWhere("users", "role", "teacher"))
+    .filter(user => user.active)
+    .sort((a, b) => Number(a.id) - Number(b.id));
+  if (teachers[0]) return { teacher: teachers[0], created: false, temporaryPassword: null };
 
   const baseUsername = (process.env.IMPORT_TEACHER_USERNAME || "gbat.teacher").trim();
   const name = (process.env.IMPORT_TEACHER_NAME || "GBAT Teacher").trim();
   let username = baseUsername;
   let suffix = 1;
 
-  while ((await query("SELECT id FROM users WHERE username = ? LIMIT 1", [username])).length) {
+  while (await findUserByUsername(username)) {
     suffix += 1;
     username = `${baseUsername}${suffix}`;
   }
 
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
-  const result = await query(
-    `INSERT INTO users (name, username, password_hash, role, must_change_password)
-     VALUES (?, ?, ?, 'teacher', 1)`,
-    [name, username, passwordHash]
-  );
+  const teacherId = await createUser({
+    name,
+    username,
+    password_hash: passwordHash,
+    role: "teacher",
+    class_id: null,
+    active: true,
+    must_change_password: true,
+    failed_login_attempts: 0,
+    locked_until: null,
+    token_version: 0,
+    last_login_at: null,
+    created_at: new Date()
+  });
 
   await logActivity(null, `Created teacher account "${name}" (${username}) for the HTML question import`);
   return {
-    teacher: { id: result.insertId, name, username },
+    teacher: { id: teacherId, name, username },
     created: true,
     temporaryPassword
   };
@@ -129,59 +144,70 @@ async function importQuestions(teacherId, questions, options) {
   let updated = 0;
   let unchanged = 0;
 
+  const existing = await listWhere("questions", "created_by", teacherId);
+  const byText = new Map(existing.map(question => [question.question_text, question]));
+
   if (options.replace) {
-    await query("DELETE FROM questions WHERE created_by = ?", [teacherId]);
+    for (const question of existing) {
+      await deleteDocById("questions", question.id);
+    }
     for (const question of questions) {
-      await query(
-        `INSERT INTO questions (question_text, options_json, correct_index, solution, subject, diagram_svg, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [question.text, JSON.stringify(question.options), question.correctIndex, question.solution, question.subject, question.diagramSvg, teacherId]
-      );
+      await insertDoc("questions", {
+        question_text: question.text,
+        options: question.options,
+        correct_index: question.correctIndex,
+        solution: question.solution,
+        subject: question.subject,
+        diagram_svg: question.diagramSvg,
+        created_by: teacherId,
+        created_at: new Date(),
+        updated_at: new Date()
+      });
       inserted += 1;
-      continue;
     }
     return { inserted, updated, unchanged };
   }
 
   for (const question of questions) {
-    const rows = await query(
-      `SELECT id, options_json, correct_index, solution, subject, diagram_svg
-         FROM questions
-        WHERE created_by = ? AND question_text = ?
-        LIMIT 1`,
-      [teacherId, question.text]
-    );
-    const existing = rows[0];
+    const current = byText.get(question.text);
 
-    if (!existing) {
-      await query(
-        `INSERT INTO questions (question_text, options_json, correct_index, solution, subject, diagram_svg, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [question.text, JSON.stringify(question.options), question.correctIndex, question.solution, question.subject, question.diagramSvg, teacherId]
-      );
+    if (!current) {
+      await insertDoc("questions", {
+        question_text: question.text,
+        options: question.options,
+        correct_index: question.correctIndex,
+        solution: question.solution,
+        subject: question.subject,
+        diagram_svg: question.diagramSvg,
+        created_by: teacherId,
+        created_at: new Date(),
+        updated_at: new Date()
+      });
       inserted += 1;
       continue;
     }
 
-    const sameOptions = existing.options_json === JSON.stringify(question.options);
-    const sameDiagram = (existing.diagram_svg || null) === question.diagramSvg;
+    const sameOptions = JSON.stringify(current.options) === JSON.stringify(question.options);
+    const sameDiagram = (current.diagram_svg || null) === question.diagramSvg;
     if (
       sameOptions &&
-      Number(existing.correct_index) === question.correctIndex &&
-      existing.solution === question.solution &&
-      existing.subject === question.subject &&
+      Number(current.correct_index) === question.correctIndex &&
+      current.solution === question.solution &&
+      current.subject === question.subject &&
       sameDiagram
     ) {
       unchanged += 1;
       continue;
     }
 
-    await query(
-      `UPDATE questions
-          SET options_json = ?, correct_index = ?, solution = ?, subject = ?, diagram_svg = ?
-        WHERE id = ?`,
-      [JSON.stringify(question.options), question.correctIndex, question.solution, question.subject, question.diagramSvg, existing.id]
-    );
+    await updateDocById("questions", current.id, {
+      options: question.options,
+      correct_index: question.correctIndex,
+      solution: question.solution,
+      subject: question.subject,
+      diagram_svg: question.diagramSvg,
+      updated_at: new Date()
+    });
     updated += 1;
   }
 
@@ -191,11 +217,10 @@ async function importQuestions(teacherId, questions, options) {
 async function main(cliOptions, { quiet = false } = {}) {
   const options = cliOptions || parseArgs(process.argv.slice(2));
   const log = quiet ? () => {} : (...args) => console.log(...args);
-  await applySchema();
-  const html = fs.readFileSync(HTML_PATH, "utf8");
+  const html = fs.readFileSync(SOURCE_PATH, "utf8");
   const questions = extractQuestions(html);
 
-  log(`Found ${questions.length} questions in index.html (${questions.filter(q => q.diagramSvg).length} with diagrams).`);
+  log(`Found ${questions.length} questions in questions-source.html (${questions.filter(q => q.diagramSvg).length} with diagrams).`);
   if (options.dryRun) {
     log("Dry run only. No database changes were made.");
     return { teacher: null, result: null, credentials: [] };
@@ -206,7 +231,7 @@ async function main(cliOptions, { quiet = false } = {}) {
 
   await logActivity(
     null,
-    `Imported questions from index.html into ${user.teacher.name}'s bank (${result.inserted} added, ${result.updated} updated)`
+    `Imported questions from questions-source.html into ${user.teacher.name}'s bank (${result.inserted} added, ${result.updated} updated)`
   );
 
   const credentials = user.created
@@ -243,7 +268,7 @@ if (require.main === module) {
       process.exitCode = 1;
     })
     .finally(async () => {
-      await pool.end();
+      await close();
     });
 }
 

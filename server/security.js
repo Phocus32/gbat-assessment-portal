@@ -3,7 +3,7 @@
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const config = require("./config");
-const { query } = require("./db");
+const { getDocById, withClassName } = require("./fdb");
 const { publicUser } = require("./utils");
 
 async function hashPassword(password) {
@@ -17,6 +17,14 @@ async function verifyPassword(password, passwordHash) {
 async function verifyDummyPassword(password) {
   const dummyHash = await bcrypt.hash("dummy-password-does-not-exist", config.bcryptRounds);
   await bcrypt.compare(password, dummyHash);
+}
+
+function sessionMaxAge() {
+  const match = /^(\d+)\s*([smhd])$/i.exec(String(config.jwtExpiresIn || "4h").trim());
+  if (!match) return 4 * 60 * 60 * 1000;
+  const amount = Number(match[1]);
+  const multiplier = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2].toLowerCase()];
+  return amount * multiplier;
 }
 
 function signSession(user) {
@@ -39,7 +47,7 @@ function setSessionCookie(res, token) {
     sameSite: "strict",
     secure: config.secureCookies,
     path: "/",
-    maxAge: 4 * 60 * 60 * 1000
+    maxAge: sessionMaxAge()
   });
 }
 
@@ -60,15 +68,7 @@ async function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, config.jwtSecret);
-    const rows = await query(
-      `SELECT u.*, c.name AS class_name
-         FROM users u
-         LEFT JOIN classes c ON c.id = u.class_id
-        WHERE u.id = ?
-        LIMIT 1`,
-      [payload.id]
-    );
-    const user = rows[0];
+    const user = await withClassName(await getDocById("users", payload.id));
 
     if (!user || !user.active) {
       return res.status(401).json({ error: "Authentication required." });

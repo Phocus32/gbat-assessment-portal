@@ -2,8 +2,12 @@
 
 const fs = require("fs");
 const path = require("path");
-const { pool, query } = require("../server/db");
-const { applySchema } = require("../server/schema");
+const {
+  listClasses,
+  findUserByUsername,
+  createUser,
+  close
+} = require("../server/fdb");
 const { hashPassword } = require("../server/security");
 const { generateTemporaryPassword, logActivity, csvCell } = require("../server/utils");
 const { nameSchema, usernameSchema } = require("../server/validation");
@@ -86,7 +90,6 @@ function slugUsername(name, className) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  await applySchema();
   const filePath = path.resolve(options.file);
   if (!fs.existsSync(filePath)) throw new Error(`CSV file not found: ${filePath}`);
 
@@ -105,7 +108,7 @@ async function main() {
     throw new Error("CSV columns must be: name, username, class");
   }
 
-  const classRows = await query("SELECT id, name FROM classes ORDER BY name");
+  const classRows = await listClasses();
   const classMap = new Map(classRows.map(cls => [cls.name.toLowerCase(), cls]));
   const dataRows = hasHeader ? rows.slice(1) : rows;
 
@@ -139,8 +142,7 @@ async function main() {
       continue;
     }
 
-    const existing = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [username]);
-    if (existing.length) {
+    if (await findUserByUsername(username)) {
       skipped.push(`Line ${line}: username "${username}" already exists.`);
       continue;
     }
@@ -148,11 +150,14 @@ async function main() {
     const temporaryPassword = generateTemporaryPassword();
     if (!options.dryRun) {
       const passwordHash = await hashPassword(temporaryPassword);
-      await query(
-        `INSERT INTO users (name, username, password_hash, role, class_id, must_change_password)
-         VALUES (?, ?, ?, 'student', ?, 1)`,
-        [name, username, passwordHash, cls.id]
-      );
+      await createUser({
+        name,
+        username,
+        password_hash: passwordHash,
+        role: "student",
+        class_id: cls.id,
+        must_change_password: true
+      });
       await logActivity(null, `Imported student account "${name}" (${username}) into ${cls.name}`);
     }
 
@@ -191,11 +196,15 @@ async function main() {
   }
 }
 
-main()
-  .catch(error => {
-    console.error(`Student import failed: ${error.message}`);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await pool.end();
-  });
+if (require.main === module) {
+  main()
+    .catch(error => {
+      console.error(`Student import failed: ${error.message}`);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await close();
+    });
+}
+
+module.exports = { main, parseArgs, parseCsv, slugUsername };

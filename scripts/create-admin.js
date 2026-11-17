@@ -1,8 +1,7 @@
 "use strict";
 
 const readline = require("readline");
-const { query, pool } = require("../server/db");
-const { applySchema } = require("../server/schema");
+const { findUserByUsername, createUser, close } = require("../server/fdb");
 const { hashPassword } = require("../server/security");
 const { nameSchema, usernameSchema, passwordSchema } = require("../server/validation");
 const { logActivity } = require("../server/utils");
@@ -69,8 +68,6 @@ function firstIssue(result) {
 }
 
 async function main() {
-  await applySchema();
-
   let name = process.env.ADMIN_NAME || process.argv[2] || "";
   let username = process.env.ADMIN_USERNAME || process.argv[3] || "";
 
@@ -92,25 +89,32 @@ async function main() {
   const passwordResult = passwordSchema.safeParse(password);
   if (!passwordResult.success) throw new Error(firstIssue(passwordResult));
 
-  const duplicate = await query("SELECT id FROM users WHERE username = ? LIMIT 1", [usernameResult.data]);
-  if (duplicate.length) throw new Error("That username is already in use.");
+  if (await findUserByUsername(usernameResult.data)) {
+    throw new Error("That username is already in use.");
+  }
 
   const passwordHash = await hashPassword(passwordResult.data);
-  await query(
-    `INSERT INTO users (name, username, password_hash, role, must_change_password)
-     VALUES (?, ?, ?, 'admin', 0)`,
-    [nameResult.data, usernameResult.data, passwordHash]
-  );
+  await createUser({
+    name: nameResult.data,
+    username: usernameResult.data,
+    password_hash: passwordHash,
+    role: "admin",
+    must_change_password: false
+  });
 
   await logActivity(null, `Created admin account "${nameResult.data}" (${usernameResult.data})`);
   console.log(`Admin account "${usernameResult.data}" created.`);
 }
 
-main()
-  .catch(error => {
-    console.error(`Could not create admin: ${error.message}`);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await pool.end();
-  });
+if (require.main === module) {
+  main()
+    .catch(error => {
+      console.error(`Could not create admin: ${error.message}`);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await close();
+    });
+}
+
+module.exports = { main };

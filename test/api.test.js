@@ -5,57 +5,73 @@ process.env.BCRYPT_ROUNDS = "4";
 process.env.LOGIN_RATE_MAX = "1000";
 process.env.COOKIE_SECURE = "false";
 process.env.HOST = "127.0.0.1";
-process.env.DB_DRIVER = "sqlite";
 process.env.JWT_SECRET = "test-only-jwt-secret-that-is-long-enough";
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-
-const SQLITE_TEST_PATH = path.join(os.tmpdir(), `gbat-portal-test-${process.pid}.db`);
-process.env.SQLITE_PATH = SQLITE_TEST_PATH;
+// `npm test` starts this emulator through firebase.json. The default also lets
+// you run node --test directly when an emulator is already listening.
+process.env.FIRESTORE_EMULATOR_HOST = process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080";
+process.env.FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "gbat-test";
+process.env.GCLOUD_PROJECT = process.env.GCLOUD_PROJECT || "gbat-test";
 
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const request = require("supertest");
 const app = require("../server/app");
-const { pool, query } = require("../server/db");
-const { applySchema } = require("../server/schema");
+const {
+  getDb,
+  listWhere,
+  findUserByUsername,
+  createUser: insertUser,
+  getDocById,
+  setSetting,
+  close
+} = require("../server/fdb");
 const { hashPassword } = require("../server/security");
 
 const CSRF = { "X-Requested-With": "XMLHttpRequest" };
 
-async function resetDatabase() {
-  const tables = [
-    "submission_answers",
-    "submissions",
-    "attempt_answers",
-    "quiz_attempts",
-    "quiz_questions",
-    "quizzes",
-    "announcements",
-    "activity_logs",
-    "questions",
-    "users",
-    "classes",
-    "settings"
-  ];
-  for (const table of tables) {
-    await query(`DELETE FROM ${table}`);
+async function clearQuery(query) {
+  const snapshot = await query.get();
+  for (const doc of snapshot.docs) {
+    for (const subcollection of await doc.ref.listCollections()) {
+      await clearQuery(subcollection);
+    }
+    await doc.ref.delete();
   }
-  await query(
-    "INSERT INTO settings (setting_key, setting_value) VALUES ('default_quiz_minutes', '45')"
-  );
+}
+
+async function resetDatabase() {
+  const db = getDb();
+  const collections = [
+    "activity_logs",
+    "announcements",
+    "attempts",
+    "class_names",
+    "classes",
+    "meta",
+    "questions",
+    "quizzes",
+    "settings",
+    "submissions",
+    "usernames",
+    "users"
+  ];
+  for (const name of collections) {
+    await clearQuery(db.collection(name));
+  }
+  await setSetting("default_quiz_minutes", "45");
 }
 
 async function createUser({ name, username, password, role, classId = null, mustChange = 0 }) {
   const passwordHash = await hashPassword(password);
-  const result = await query(
-    `INSERT INTO users (name, username, password_hash, role, class_id, must_change_password)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [name, username, passwordHash, role, classId, mustChange]
-  );
-  return result.insertId;
+  return insertUser({
+    name,
+    username,
+    password_hash: passwordHash,
+    role,
+    class_id: classId,
+    must_change_password: Boolean(mustChange)
+  });
 }
 
 async function login(username, password) {
@@ -68,7 +84,6 @@ async function login(username, password) {
 }
 
 before(async () => {
-  await applySchema();
   await resetDatabase();
   await createUser({
     name: "Portal Admin",
@@ -79,10 +94,7 @@ before(async () => {
 });
 
 after(async () => {
-  await pool.end();
-  for (const suffix of ["", "-wal", "-shm"]) {
-    fs.rmSync(`${SQLITE_TEST_PATH}${suffix}`, { force: true });
-  }
+  await close();
 });
 
 test("secured portal end-to-end API flow", async t => {
@@ -431,8 +443,8 @@ test("secured portal end-to-end API flow", async t => {
     const results = await teacherAgent.get(`/api/teacher/quizzes/${quizId}/results`);
     assert.equal(results.status, 404);
 
-    const rows = await query("SELECT COUNT(*) AS count FROM submissions WHERE quiz_id = ?", [quizId]);
-    assert.equal(Number(rows[0].count), 2);
+    const keptSubmissions = await listWhere("submissions", "quiz_id", quizId);
+    assert.equal(keptSubmissions.length, 2);
 
     const start = await studentAgent
       .post(`/api/student/quizzes/${quizId}/start`)
@@ -542,12 +554,12 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF);
     assert.equal(removed.status, 200);
 
-    const rows = await query("SELECT COUNT(*) AS count FROM users WHERE username = 'delete.me'");
-    assert.equal(Number(rows[0].count), 0);
+    const deletedUser = await findUserByUsername("delete.me");
+    assert.equal(deletedUser, null);
 
-    const studentRows = await query("SELECT id FROM users WHERE username = 'student.one' LIMIT 1");
+    const studentRow = await findUserByUsername("student.one");
     const blocked = await adminAgent
-      .delete(`/api/admin/users/${studentRows[0].id}`)
+      .delete(`/api/admin/users/${studentRow.id}`)
       .set(CSRF);
     assert.equal(blocked.status, 409);
     assert.match(blocked.body.error, /Cannot delete/);
@@ -595,9 +607,8 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(patched.status, 200);
     assert.equal(patched.body.shuffleQuestions, false);
 
-    const rows = await query("SELECT id, question_order_json FROM quiz_attempts WHERE id = ?", [started.body.attemptId]);
-    const order = JSON.parse(rows[0].question_order_json || "[]");
-    assert.deepEqual(order, [0, 1]);
+    const attempt = await getDocById("attempts", started.body.attemptId);
+    assert.deepEqual(attempt.question_order, [0, 1]);
   });
 
   await t.test("importStudentsFromWorkbook parses rows from an Excel workbook buffer", async () => {

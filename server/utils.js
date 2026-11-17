@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { query } = require("./db");
+const { insertDoc } = require("./fdb");
 
 function asyncHandler(handler) {
   return function wrapped(req, res, next) {
@@ -28,6 +28,7 @@ function publicUser(row) {
 }
 
 function parseOptions(value) {
+  if (Array.isArray(value)) return value;
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed : [];
@@ -70,10 +71,12 @@ async function logActivity(actor, action) {
   const isActorObject = actor && typeof actor === "object";
   const actorName = isActorObject ? (actor.name || actor.username || "System") : (typeof actor === "string" ? actor : "System");
   const actorId = isActorObject ? actor.id : null;
-  await query(
-    "INSERT INTO activity_logs (actor_user_id, actor_name, action) VALUES (?, ?, ?)",
-    [actorId, String(actorName).slice(0, 120), String(action).slice(0, 255)]
-  );
+  await insertDoc("activity_logs", {
+    actor_user_id: actorId,
+    actor_name: String(actorName).slice(0, 120),
+    action: String(action).slice(0, 255),
+    created_at: new Date()
+  }, "logs");
 }
 
 function dateTimeLabel(value) {
