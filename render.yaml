@@ -1,0 +1,28 @@
+# Single-service deployment. No external database: SQLite lives on the disk
+# mounted at /data. See HOSTING.md for the full walkthrough.
+services:
+  - type: web
+    name: gbat-assessment-portal
+    runtime: docker
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/health
+    disk:
+      name: gbat-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /data
+      - key: SQLITE_PATH
+        value: /data/gbat.db
+      - key: TRUST_PROXY
+        value: "true"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true

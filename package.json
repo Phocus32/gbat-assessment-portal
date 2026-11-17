@@ -1,0 +1,36 @@
+{
+  "name": "gbat-assessment-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secured GBAT online assessment portal",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "setup-db": "node scripts/setup-db.js",
+    "create-admin": "node scripts/create-admin.js",
+    "import-html": "node scripts/import-html-questions.js",
+    "import-students": "node scripts/import-students.js",
+    "seed-portal": "node scripts/seed-portal.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.10",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.5.0",
+    "mysql2": "^3.24.6",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.2"
+  }
+}

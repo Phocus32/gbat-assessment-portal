@@ -1,0 +1,1990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GBAT Online Assessment Portal</title>
+  <style>
+    :root {
+      --primary: #1d4ed8;
+      --primary-dark: #1e3a8a;
+      --primary-soft: #eff6ff;
+      --success: #15803d;
+      --success-bg: #dcfce7;
+      --danger: #b91c1c;
+      --danger-bg: #fee2e2;
+      --warn: #b45309;
+      --warn-bg: #fff7ed;
+      --warn-border: #fdba74;
+      --bg: #f1f5f9;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #cbd5e1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .hidden { display: none !important; }
+
+    .navbar {
+      background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+      color: #fff;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.15);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-badge { background: #fff; color: var(--primary-dark); font-weight: 900; padding: 6px 10px; border-radius: 8px; font-size: 0.95rem; }
+    .brand-title { font-weight: 700; font-size: 1.05rem; }
+    .brand-sub { font-size: 0.78rem; opacity: 0.85; }
+    .nav-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .pill { background: rgba(255, 255, 255, 0.16); padding: 5px 12px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; }
+    .btn-nav { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.35); padding: 6px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+    .btn-nav:hover { background: rgba(255,255,255,0.3); }
+
+    .container { max-width: 1080px; margin: 24px auto; padding: 0 16px 56px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 24px; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04); margin-bottom: 20px; }
+
+    .btn { padding: 10px 18px; border: none; border-radius: 8px; font-weight: 600; font-size: 0.92rem; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
+    .btn-sm { padding: 6px 11px; font-size: 0.82rem; border-radius: 6px; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-secondary { background: #e2e8f0; color: var(--text); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-outline { background: #fff; border: 1px solid var(--border); color: var(--text); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-block { width: 100%; }
+
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 0.84rem; font-weight: 600; margin-bottom: 5px; color: var(--muted); }
+    .field input, .field select, .field textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.94rem; font-family: inherit; background: #fff; }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+
+    .alert { padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; margin: 10px 0; }
+    .alert-error { background: var(--danger-bg); color: var(--danger); border: 1px solid #fecaca; }
+    .alert-success { background: var(--success-bg); color: var(--success); border: 1px solid #bbf7d0; }
+    .alert-info { background: var(--primary-soft); color: var(--primary-dark); border: 1px solid #bfdbfe; }
+
+    .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(10px); background: #0f172a; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; z-index: 200; max-width: 90vw; text-align: center; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    .login-wrap { max-width: 480px; margin: 40px auto; }
+    .role-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+    .role-tab { padding: 10px; border: 2px solid var(--border); border-radius: 10px; background: #f8fafc; font-weight: 700; cursor: pointer; text-align: center; color: var(--muted); }
+    .role-tab.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
+
+    .dash-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+    .dash-header h1 { margin: 0; font-size: 1.45rem; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    .kpi-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+    .kpi-value { font-size: 1.7rem; font-weight: 800; color: var(--primary-dark); margin-top: 4px; }
+
+    .sub-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+    .sub-tab { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: #fff; font-weight: 600; cursor: pointer; font-size: 0.9rem; }
+    .sub-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    .quiz-cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+    .quiz-item-card { border: 1px solid var(--border); border-radius: 12px; padding: 18px; background: #f8fafc; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; }
+    .checklist-box { max-height: 270px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: #f8fafc; }
+    .check-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 4px; border-bottom: 1px solid #e2e8f0; font-size: 0.92rem; cursor: pointer; }
+    .check-row:last-child { border-bottom: none; }
+    .check-row input { width: auto; margin-top: 3px; cursor: pointer; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { padding: 11px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    th { background: #f8fafc; font-weight: 700; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; }
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; }
+    .b-green { background: var(--success-bg); color: var(--success); }
+    .b-red { background: var(--danger-bg); color: var(--danger); }
+    .b-blue { background: var(--primary-soft); color: var(--primary); }
+    .b-gray { background: #e2e8f0; color: var(--muted); }
+
+    .quiz-layout { display: grid; grid-template-columns: 1fr 280px; gap: 20px; align-items: start; }
+    @media (max-width: 860px) { .quiz-layout { grid-template-columns: 1fr; } }
+    .progress-wrap { width: 100%; height: 8px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-bottom: 16px; }
+    .progress-bar { height: 100%; width: 0%; background: var(--primary); transition: width 0.25s ease; }
+    .q-text { font-size: 1.12rem; font-weight: 600; margin: 12px 0 16px; }
+    .diagram { margin: 10px 0 16px; display: flex; justify-content: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; }
+    .options { display: grid; gap: 10px; }
+    .opt-btn { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 15px; font-size: 1rem; background: #fff; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; color: var(--text); }
+    .opt-btn:hover:not(:disabled) { border-color: var(--primary); background: var(--primary-soft); }
+    .opt-btn:disabled { cursor: default; }
+    .opt-letter { width: 28px; height: 28px; border-radius: 50%; background: #e2e8f0; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.88rem; flex-shrink: 0; }
+    .opt-btn.correct { border-color: var(--success); background: var(--success-bg); }
+    .opt-btn.correct .opt-letter { background: var(--success); color: #fff; }
+    .opt-btn.wrong { border-color: var(--danger); background: var(--danger-bg); }
+    .opt-btn.wrong .opt-letter { background: var(--danger); color: #fff; }
+
+    .feedback { margin-top: 16px; padding: 15px; border-radius: 10px; display: none; }
+    .feedback.show { display: block; }
+    .feedback.correct { background: var(--success-bg); border: 1px solid #86efac; color: #14532d; }
+    .feedback.wrong { background: var(--warn-bg); border: 1px solid var(--warn-border); color: #431407; }
+    .solution-box { margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(0,0,0,0.2); white-space: pre-line; font-size: 0.94rem; }
+    .palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 10px; }
+    .p-dot { height: 32px; border-radius: 6px; border: 1px solid var(--border); background: #fff; font-weight: 600; font-size: 0.82rem; cursor: pointer; }
+    .p-dot.active { border: 2px solid var(--primary); }
+    .p-dot.p-correct { background: var(--success-bg); border-color: var(--success); color: var(--success); }
+    .p-dot.p-wrong { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+
+    .review-item { border: 1px solid var(--border); border-left-width: 5px; border-radius: 10px; padding: 14px; margin-top: 12px; background: #fff; }
+    .review-item.passed { border-left-color: var(--success); }
+    .review-item.missed { border-left-color: var(--danger); }
+    .action-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    @media (max-width: 600px) { .card { padding: 16px; } .navbar { padding: 12px 14px; } }
+    @media print {
+      .navbar, .no-print { display: none !important; }
+      body { background: #fff; }
+      .card { border: none; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar">
+    <div class="brand">
+      <div class="brand-badge">GBAT</div>
+      <div>
+        <div class="brand-title">GBAT Assessment Portal</div>
+        <div class="brand-sub">Mathematics Mock Quizzes</div>
+      </div>
+    </div>
+    <div class="nav-right">
+      <span class="pill hidden" id="navRole"></span>
+      <span class="pill hidden" id="navUser"></span>
+      <span class="pill hidden" id="navTimer">⏱ 45:00</span>
+      <button class="btn-nav hidden" id="logoutBtn">Logout</button>
+    </div>
+  </nav>
+
+  <main class="container">
+
+    <!-- 1. LOGIN -->
+    <section class="card login-wrap" id="loginScreen">
+      <h2 style="margin:0 0 6px;">Portal Sign In</h2>
+      <p style="margin:0 0 18px; color:var(--muted); font-size:0.92rem;">Students: open the quiz link your teacher sent you. If you already opened it on this device, sign in below with your Name and Class.</p>
+
+      <div class="role-tabs">
+        <button class="role-tab active" data-role="student">Student</button>
+        <button class="role-tab" data-role="admin">Admin</button>
+      </div>
+
+      <div id="loginStudentForm">
+        <div class="field">
+          <label for="stuNameInput">Full Name *</label>
+          <input type="text" id="stuNameInput" placeholder="Enter your full name" autocomplete="name" />
+        </div>
+        <div class="field">
+          <label for="stuClassSelect">Select Your Class *</label>
+          <select id="stuClassSelect"></select>
+        </div>
+        <div id="noClassHint" class="alert alert-info hidden">No quizzes on this device yet. Please open the quiz link your teacher sent you (WhatsApp, email or class group).</div>
+        <button class="btn btn-primary btn-block" id="stuLoginBtn">Enter Student Portal</button>
+      </div>
+
+      <div id="loginAdminForm" class="hidden">
+        <div class="field">
+          <label for="adminPassInput">Admin Password *</label>
+          <input type="password" id="adminPassInput" placeholder="Enter admin password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        </div>
+        <button class="btn btn-primary btn-block" id="adminLoginBtn">Sign In as Admin</button>
+      </div>
+
+      <div id="loginError" class="alert alert-error hidden"></div>
+    </section>
+
+    <!-- 1B. SHARED QUIZ -->
+    <section class="card login-wrap hidden" id="sharedQuizScreen">
+      <span class="badge b-blue">Shared Quiz</span>
+      <h2 id="shareQuizTitle" style="margin:8px 0 4px;"></h2>
+      <p id="shareQuizMeta" style="color:var(--muted); font-size:0.92rem; margin:0 0 18px;"></p>
+      <div class="field">
+        <label for="shareNameInput">Full Name *</label>
+        <input type="text" id="shareNameInput" placeholder="Enter your full name" autocomplete="name" />
+      </div>
+      <div class="field">
+        <label>Class</label>
+        <input type="text" id="shareClassInput" readonly />
+      </div>
+      <div id="shareError" class="alert alert-error hidden"></div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-primary" id="shareExamBtn">Start Exam</button>
+        <button class="btn btn-secondary" id="sharePracticeBtn">Practice Mode</button>
+      </div>
+    </section>
+
+    <!-- 2. STUDENT PORTAL -->
+    <section id="studentDashboard" class="hidden">
+      <div class="dash-header">
+        <div>
+          <h1 id="stuWelcome">Student Portal</h1>
+          <span style="color:var(--muted); font-size:0.92rem;" id="stuMeta"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">Available Quizzes for Your Class</h3>
+        <div id="stuQuizzesList" class="quiz-cards-grid"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">My Submitted Attempts (This Device)</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Quiz Title</th><th>Mode</th><th>Score</th><th>%</th><th>Date</th><th>Review</th></tr>
+            </thead>
+            <tbody id="stuHistoryBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2B. QUIZ RUNNER -->
+    <section id="quizScreen" class="hidden">
+      <div class="quiz-layout">
+        <div class="card">
+          <div style="font-size:0.85rem; font-weight:700; color:var(--muted); margin-bottom:8px;" id="quizActiveTitle"></div>
+          <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge b-blue" id="qBadge">Question 1</span>
+            <span style="font-size:0.86rem; color:var(--muted);" id="answeredBadge">0 answered</span>
+          </div>
+          <div class="q-text" id="qText"></div>
+          <div class="diagram hidden" id="qDiagram"></div>
+          <div class="options" id="optionsBox"></div>
+          <div class="feedback" id="feedbackBox"></div>
+          <div style="display:flex; justify-content:space-between; margin-top:20px; gap:10px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" id="prevBtn">← Previous</button>
+            <button class="btn btn-primary" id="nextBtn">Next Question →</button>
+          </div>
+        </div>
+
+        <aside class="card">
+          <div style="font-weight:700; margin-bottom:8px;">Live Progress</div>
+          <div style="font-size:0.9rem; display:flex; justify-content:space-between; margin-bottom:4px;">
+            <span>Score:</span><strong id="sideScore">0 / 0</strong>
+          </div>
+          <div style="font-size:0.9rem; display:flex; justify-content:space-between; margin-bottom:10px;">
+            <span>Remaining:</span><strong id="sideRemain">0</strong>
+          </div>
+          <div style="font-size:0.8rem; font-weight:700; color:var(--muted); text-transform:uppercase;">Navigator</div>
+          <div class="palette-grid" id="paletteGrid"></div>
+          <button class="btn btn-outline btn-block" id="finishEarlyBtn" style="margin-top:16px;">Submit &amp; Send Score</button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- 2C. RESULT -->
+    <section class="card hidden" id="resultScreen">
+      <div style="text-align:center; padding-bottom:18px; border-bottom:1px solid var(--border);">
+        <span class="badge b-blue" id="resQuizBadge">Assessment Report</span>
+        <h2 id="resStudentTitle" style="margin:8px 0 4px;"></h2>
+        <div style="font-size:2.5rem; font-weight:800; color:var(--primary);" id="resScoreBig"></div>
+        <p id="resRemark" style="color:var(--muted); margin:6px 0 12px;"></p>
+
+        <div id="emailDeliveryBanner" class="alert alert-info hidden" style="max-width:640px; margin:10px auto;"></div>
+        <div id="emailFallbackWrap" class="hidden no-print" style="margin-bottom:14px;">
+          <a id="mailtoFallbackBtn" class="btn btn-success btn-sm" href="#">Send Results via Email App</a>
+        </div>
+
+        <div class="no-print" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:10px;">
+          <button class="btn btn-primary" id="resBackBtn">Back</button>
+          <button class="btn btn-secondary" id="resMissedBtn">Show Missed Only</button>
+          <button class="btn btn-outline" onclick="window.print()">Print / Save PDF</button>
+        </div>
+      </div>
+      <div id="resReviewList"></div>
+    </section>
+
+    <!-- 3. ADMIN -->
+    <section id="adminDashboard" class="hidden">
+      <div class="dash-header">
+        <div>
+          <h1>Admin Dashboard</h1>
+          <span style="color:var(--muted); font-size:0.92rem;" id="adminMeta"></span>
+        </div>
+        <button class="btn btn-success btn-sm" id="exportCsvBtn">Download Submissions (CSV)</button>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Active Quizzes</div><div class="kpi-value" id="aKpiQuizzes">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Classes</div><div class="kpi-value" id="aKpiClasses">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Questions in Bank</div><div class="kpi-value" id="aKpiBank">0</div></div>
+        <div class="kpi-card"><div class="kpi-label">Local Submissions</div><div class="kpi-value" id="aKpiSubs">0</div></div>
+      </div>
+
+      <div class="sub-tabs" id="adminTabs">
+        <button class="sub-tab active" data-tab="aQuizzes">Quizzes</button>
+        <button class="sub-tab" data-tab="aClasses">Classes</button>
+        <button class="sub-tab" data-tab="aBank">Question Bank</button>
+        <button class="sub-tab" data-tab="aSubmissions">Submissions</button>
+        <button class="sub-tab" data-tab="aSettings">Settings &amp; Security</button>
+      </div>
+
+      <div id="aQuizzes">
+        <div class="card">
+          <h3 style="margin-top:0;">Create Quiz for Students</h3>
+          <div class="form-grid">
+            <div class="field">
+              <label>Quiz Title *</label>
+              <input type="text" id="qzTitleInput" placeholder="e.g. GBAT Mock Paper 1" />
+            </div>
+            <div class="field">
+              <label>Assign to Class *</label>
+              <select id="qzClassSelect"></select>
+            </div>
+            <div class="field">
+              <label>Duration (Minutes) *</label>
+              <input type="number" id="qzMinutesInput" value="45" min="1" max="180" />
+            </div>
+          </div>
+
+          <div class="field">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+              <label style="margin:0;">Select Questions from Bank (<span id="qzSelectedCount">0</span> selected) *</label>
+              <label style="margin:0; display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--primary);">
+                <input type="checkbox" id="qzSelectAll" style="width:auto;" /> Select All Questions
+              </label>
+            </div>
+            <div class="checklist-box" id="qzChecklist"></div>
+          </div>
+
+          <div id="qzFormMsg" class="alert hidden"></div>
+          <button class="btn btn-primary" id="createQuizBtn">+ Create &amp; Publish Quiz</button>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0;">Published Quizzes</h3>
+          <p style="font-size:0.86rem; color:var(--muted); margin-top:0;">Students must open the <strong>Copy Link</strong> URL of a quiz. After you edit a quiz or its questions, copy and send a fresh link.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Title</th><th>Class</th><th>Questions</th><th>Duration</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="aQuizzesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card hidden" id="aClasses">
+        <h3 style="margin-top:0;">Manage Classes</h3>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:220px; margin-bottom:0;">
+            <label>New Class Name *</label>
+            <input type="text" id="aNewClassName" placeholder="e.g. SHS 2A" />
+          </div>
+          <button class="btn btn-primary" id="aAddClassBtn">+ Add Class</button>
+        </div>
+        <div id="aClassMsg" class="alert hidden"></div>
+
+        <div class="table-wrap" style="margin-top:18px;">
+          <table>
+            <thead><tr><th>Class Name</th><th>Quizzes Assigned</th><th>Actions</th></tr></thead>
+            <tbody id="aClassesBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="aBank">
+        <h3 style="margin-top:0;">Add New Question to Bank</h3>
+        <div class="field"><label>Question Text *</label><input type="text" id="newQText" placeholder="Enter math question..." /></div>
+        <div class="form-grid">
+          <div class="field"><label>Option A *</label><input type="text" id="newOptA" /></div>
+          <div class="field"><label>Option B *</label><input type="text" id="newOptB" /></div>
+          <div class="field"><label>Option C *</label><input type="text" id="newOptC" /></div>
+          <div class="field"><label>Option D *</label><input type="text" id="newOptD" /></div>
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label>Correct Answer *</label>
+            <select id="newQAns">
+              <option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Step-by-Step Worked Solution *</label>
+            <textarea id="newQSol" rows="2" placeholder="Explain each step clearly..."></textarea>
+          </div>
+        </div>
+        <div id="qBankMsg" class="alert hidden"></div>
+        <button class="btn btn-primary" id="addQuestionBtn">+ Add Question</button>
+
+        <hr style="border:none; border-top:1px solid var(--border); margin:24px 0;" />
+
+        <h3 style="margin-top:0;">Bulk Upload Questions</h3>
+        <p style="font-size:0.88rem; color:var(--muted); margin-top:0;">
+          Upload a question file instead of typing them one by one. Supported: <strong>.csv, .xlsx, .xls, .xlsm, .ods, .json, .tsv, .txt</strong>.
+        </p>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:240px; margin-bottom:0;">
+            <label>Choose Questions File</label>
+            <input type="file" id="importFileInput" accept=".csv,.tsv,.txt,.json,.xlsx,.xls,.xlsm,.ods" />
+          </div>
+          <button class="btn btn-success" id="importQuestionsBtn">⬆ Import Questions</button>
+          <button class="btn btn-outline" id="downloadTemplateBtn">Download CSV Template</button>
+        </div>
+        <div id="importMsg" class="alert hidden"></div>
+
+        <details style="margin-top:14px; font-size:0.88rem; color:var(--muted);">
+          <summary style="cursor:pointer; font-weight:600;">File format guide</summary>
+          <div style="margin-top:10px; line-height:1.6;">
+            <p style="margin:0 0 6px;"><strong>CSV / Excel / TSV / TXT:</strong> The first row should be a header row with these columns:</p>
+            <p style="margin:0 0 8px; font-family:monospace; background:#f8fafc; border:1px solid var(--border); border-radius:6px; padding:8px; overflow-x:auto;">
+              question, optionA, optionB, optionC, optionD, answer, solution, svg
+            </p>
+            <ul style="margin:0 0 8px; padding-left:20px;">
+              <li><strong>question</strong> — the question text (required).</li>
+              <li><strong>optionA–optionD</strong> — the four answer choices (required).</li>
+              <li><strong>answer</strong> — A, B, C or D (also accepts 1–4 or the exact option text).</li>
+              <li><strong>solution</strong> — the step-by-step explanation shown to students.</li>
+              <li><strong>svg</strong> — optional raw SVG code for a diagram.</li>
+            </ul>
+            <p style="margin:0;"><strong>JSON:</strong> An array of question objects, e.g.<br />
+              <span style="font-family:monospace; font-size:0.82rem;">[{"q":"...","options":["A","B","C","D"],"ans":0,"sol":"...","svg":"&lt;svg...&gt;"}]</span>
+            </p>
+            <p style="margin:8px 0 0;">For Word documents, save/export them as CSV first, then upload the CSV.</p>
+          </div>
+        </details>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:26px;">
+          <h3 style="margin:0;">Question Bank (<span id="qBankCount"></span>)</h3>
+          <div class="action-row">
+            <button class="btn btn-secondary btn-sm" id="shuffleBankBtn">🔀 Shuffle Questions</button>
+            <button class="btn btn-danger btn-sm" id="clearBankBtn">Delete Demo Questions</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Question</th><th>Correct</th><th>Solution</th><th>Action</th></tr></thead>
+            <tbody id="aQuestionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="aSubmissions">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+          <h3 style="margin:0;">Student Submissions (This Browser)</h3>
+          <input type="text" id="aSearchSubs" placeholder="Filter by student, class, or quiz..." style="padding:8px 12px; border:1px solid var(--border); border-radius:8px; width:260px;" />
+        </div>
+        <p style="font-size:0.86rem; color:var(--muted); margin-top:0;">
+          Students' results are saved on their own devices. Every submission is emailed directly to <strong id="subTargetEmailLabel"></strong>; check that inbox for all student scores.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Student Name</th><th>Class</th><th>Quiz</th><th>Mode</th><th>Score</th><th>%</th><th>Date</th><th>Action</th></tr>
+            </thead>
+            <tbody id="aSubsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="aSettings">
+        <h3 style="margin-top:0;">Results Receiver Email</h3>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:240px; margin-bottom:0;">
+            <label>Destination Email for Student Submissions</label>
+            <input type="email" id="aEmailInput" />
+          </div>
+          <button class="btn btn-primary" id="aSaveEmailBtn">Save Email</button>
+        </div>
+        <div id="aEmailMsg" class="alert hidden"></div>
+
+        <hr style="border:none; border-top:1px solid var(--border); margin:24px 0;" />
+
+        <h3>Change Admin Password</h3>
+        <p style="font-size:0.84rem; color:var(--muted); margin-top:-4px;">
+          The password is saved in this browser only. Other devices keep the original password until changed on that device.
+        </p>
+        <div class="form-grid">
+          <div class="field"><label>New Password (min 8 characters)</label><input type="password" id="aNewPass1" autocomplete="new-password" /></div>
+          <div class="field"><label>Confirm New Password</label><input type="password" id="aNewPass2" autocomplete="new-password" /></div>
+        </div>
+        <button class="btn btn-primary" id="aChangePassBtn">Update Password</button>
+        <div id="aPassMsg" class="alert hidden"></div>
+
+        <hr style="border:none; border-top:1px solid var(--border); margin:24px 0;" />
+
+        <h3>Data Management</h3>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" id="exportJsonBtn">Export Backup (JSON)</button>
+          <button class="btn btn-danger btn-sm" id="clearSubsBtn">Clear Local Submissions</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const STORAGE_KEY = "gbat_simple_portal_v2";
+    const DEFAULT_RECEIVER_EMAIL = "phocus32@gmail.com";
+    const DEMO_CLASS_IDS = ["c1", "c2", "c3"];
+    const letters = ["A", "B", "C", "D"];
+
+    const _k = [78, 105, 104, 123, 43, 72, 107, 116, 112, 117, 42, 57, 55, 57, 61];
+    async function sha256Hex(text) {
+      const buf = new TextEncoder().encode(text);
+      const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+      return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+    async function verifyAdminPassword(input) {
+      const value = String(input == null ? "" : input).trim();
+      if (state.adminPassHash) {
+        const h = await sha256Hex(value);
+        return h === state.adminPassHash;
+      }
+      if (value.length !== _k.length) return false;
+      for (let i = 0; i < _k.length; i++) {
+        if (value.charCodeAt(i) + 7 !== _k[i]) return false;
+      }
+      return true;
+    }
+
+    const defaultQuestions = [
+      { id: "q1", q: "A point P(6, -3) is rotated 180° about the origin. Find its image.", options: ["(-6, 3)", "(6, 3)", "(-3, 6)", "(-6, -3)"], ans: 0, sol: "Rule for 180° rotation about the origin: (x, y) → (-x, -y).\nSubstitute P(6, -3): x' = -6, y' = -(-3) = 3.\nImage = (-6, 3)." },
+      { id: "q2", q: "Write the next two terms: 3, 7, 15, 31, __, __.", options: ["47, 63", "62, 126", "63, 127", "64, 128"], ans: 2, sol: "Differences: 7-3=4, 15-7=8, 31-15=16.\nDifferences double each step (+32, +64).\n31 + 32 = 63, and 63 + 64 = 127." },
+      { id: "q3", q: "Convert 0.825 to a percentage.", options: ["8.25%", "82.5%", "825%", "0.825%"], ans: 1, sol: "Multiply by 100%: 0.825 × 100% = 82.5%." },
+      { id: "q4", q: "Find the HCF of 18, 30 and 48.", options: ["3", "6", "9", "12"], ans: 1, sol: "18 = 2 × 3², 30 = 2 × 3 × 5, 48 = 2⁴ × 3.\nCommon factors with lowest powers: 2 × 3 = 6." },
+      { id: "q5", q: "Which number is divisible by both 7 and 11?", options: ["154", "165", "176", "187"], ans: 0, sol: "7 × 11 = 77.\nMultiples of 77: 77, 154, 231...\nSo 154 is divisible by both 7 and 11." },
+      { id: "q6", q: "Akosua is x years old. In 9 years, she will be 25. Which equation represents the statement?", options: ["x - 9 = 25", "x + 9 = 25", "25 + x = 9", "9x = 25"], ans: 1, sol: "Current age = x. Age in 9 years = x + 9.\nEquation: x + 9 = 25." },
+      { id: "q7", q: "Find the gradient of the line through R(2, -1) and S(6, 7).", options: ["1/2", "2", "3", "4"], ans: 1, sol: "m = (y₂ - y₁) / (x₂ - x₁) = (7 - (-1)) / (6 - 2) = 8 / 4 = 2." },
+      { id: "q8", q: "Find the median of the composite numbers less than 18.", options: ["9", "10", "11", "12"], ans: 1, sol: "Composite numbers < 18: 4, 6, 8, 9, 10, 12, 14, 15, 16 (9 numbers).\nMiddle (5th) value = 10." },
+      { id: "q9", q: "Two angles of a triangle add up to 137°. Find the third angle.", options: ["33°", "43°", "47°", "53°"], ans: 1, sol: "Angles in a triangle sum to 180°.\nThird angle = 180° - 137° = 43°." },
+      { id: "q10", q: "The bearing of Lapaz from Achimota is 128°. Find the bearing of A from Lapaz.", options: ["052°", "128°", "232°", "308°"], ans: 3, sol: "Back bearing: since 128° < 180°, add 180°.\n128° + 180° = 308°." },
+      { id: "q11", q: "Expand and simplify (m - 3)(m + 5).", options: ["m² + 2m - 15", "m² + 8m - 15", "m² - 2m - 15", "m² + 2m + 15"], ans: 0, sol: "m(m + 5) - 3(m + 5) = m² + 5m - 3m - 15 = m² + 2m - 15." },
+      { id: "q12", q: "A bus travels at 72 km/h for 2.5 hours. Find the distance covered.", options: ["144 km", "160 km", "180 km", "216 km"], ans: 2, sol: "Distance = Speed × Time = 72 × 2.5 = 144 + 36 = 180 km." },
+      { id: "q13", q: "A cyclist travels 20 km north and then 15 km east. How far is the cyclist from the starting point?", options: ["25 km", "30 km", "35 km", "40 km"], ans: 0, sol: "By Pythagoras' theorem: d = √(20² + 15²) = √(400 + 225) = √625 = 25 km." },
+      { id: "q14", q: "A circle has a diameter of 35 cm. Find its circumference. [Take π = 22/7]", options: ["55 cm", "70 cm", "110 cm", "220 cm"], ans: 2, sol: "C = πd = (22/7) × 35 = 22 × 5 = 110 cm." },
+      { id: "q15", q: "A point (-4, 3) is rotated 90° anticlockwise about the origin. Find its image.", options: ["(-3, -4)", "(3, 4)", "(-3, 4)", "(4, -3)"], ans: 0, sol: "90° anticlockwise rule: (x, y) → (-y, x).\n(-4, 3) → (-3, -4)." },
+      { id: "q16", q: "The mean of 6, 8, h, 10 and 11 is 9. Find h.", options: ["8", "9", "10", "11"], ans: 2, sol: "(6 + 8 + h + 10 + 11) / 5 = 9\n35 + h = 45\nh = 45 - 35 = 10." },
+      { id: "q17", q: "Express 9.8 litres in millilitres.", options: ["98 ml", "980 ml", "9,800 ml", "98,000 ml"], ans: 2, sol: "1 litre = 1,000 ml.\n9.8 × 1,000 = 9,800 ml." },
+      { id: "q18", q: "Two fair dice are thrown. Find the probability that their sum is 7.", options: ["1/12", "1/9", "1/6", "1/4"], ans: 2, sol: "Total outcomes = 36.\nPairs summing to 7: (1,6), (2,5), (3,4), (4,3), (5,2), (6,1) = 6 pairs.\nProbability = 6/36 = 1/6." },
+      { id: "q19", q: "Round 684.756 to the nearest tenth.", options: ["684.7", "684.8", "684.75", "685.0"], ans: 1, sol: "Tenths digit is 7; next digit is 5 (round up).\n684.756 → 684.8." },
+      { id: "q20", q: "Write nine million, seventy thousand and six in figures.", options: ["9,700,006", "9,070,006", "9,007,006", "9,070,600"], ans: 1, sol: "9,000,000 + 70,000 + 6 = 9,070,006." },
+      { id: "q21", q: "A worker earns GH₵145 each day. How much will the worker earn in 12 days?", options: ["GH₵1,620", "GH₵1,680", "GH₵1,740", "GH₵1,780"], ans: 2, sol: "145 × 12 = (145 × 10) + (145 × 2) = 1,450 + 290 = GH₵1,740." },
+      { id: "q22", q: "Each exterior angle of a regular polygon is 20°. How many sides does the polygon have?", options: ["16", "18", "20", "24"], ans: 1, sol: "n = 360° / 20° = 18 sides." },
+      { id: "q23", q: "A regular octagon has side length 9.5 cm. Find its perimeter.", options: ["66.5 cm", "72.0 cm", "76.0 cm", "85.5 cm"], ans: 2, sol: "Octagon has 8 sides.\nPerimeter = 8 × 9.5 = 76.0 cm." },
+      { id: "q24", q: "Use the isosceles triangle to find h.", svg: `<svg width="220" height="150" viewBox="0 0 240 170" xmlns="http://www.w3.org/2000/svg"><polygon points="120,20 40,140 200,140" fill="none" stroke="#0f172a" stroke-width="2.5"/><line x1="120" y1="20" x2="120" y2="140" stroke="#0f172a" stroke-width="1.8" stroke-dasharray="5,4"/><rect x="120" y="128" width="12" height="12" fill="none" stroke="#0f172a" stroke-width="1.5"/><text x="56" y="78" font-size="14" font-weight="600" fill="#0f172a">13 cm</text><text x="155" y="78" font-size="14" font-weight="600" fill="#0f172a">13 cm</text><text x="126" y="92" font-size="14" font-weight="700" fill="#1d4ed8">h</text><text x="102" y="160" font-size="14" font-weight="600" fill="#0f172a">10 cm</text></svg>`, options: ["10 cm", "12 cm", "13 cm", "15 cm"], ans: 1, sol: "Half base = 10 ÷ 2 = 5 cm.\nh = √(13² - 5²) = √(169 - 25) = √144 = 12 cm." },
+      { id: "q25", q: "Round GH₵86,549 to the nearest thousand cedis.", options: ["GH₵86,000", "GH₵86,500", "GH₵87,000", "GH₵90,000"], ans: 2, sol: "Thousands digit is 6; hundreds digit is 5 (round up).\nGH₵87,000." },
+      { id: "q26", q: "The area of a square tile is 144 cm². Find its perimeter.", options: ["24 cm", "36 cm", "48 cm", "56 cm"], ans: 2, sol: "Side = √144 = 12 cm.\nPerimeter = 4 × 12 = 48 cm." },
+      { id: "q27", q: "A cube has side 7 cm. Find its total surface area.", options: ["196 cm²", "294 cm²", "343 cm²", "392 cm²"], ans: 1, sol: "TSA = 6s² = 6 × 7² = 6 × 49 = 294 cm²." },
+      { id: "q28", q: "Use the diagram to find y.", svg: `<svg width="240" height="135" viewBox="0 0 260 150" xmlns="http://www.w3.org/2000/svg"><polygon points="45,25 225,75 45,125" fill="none" stroke="#0f172a" stroke-width="2.5"/><text x="30" y="25" font-size="14" font-weight="700" fill="#0f172a">A</text><text x="232" y="80" font-size="14" font-weight="700" fill="#0f172a">B</text><text x="30" y="132" font-size="14" font-weight="700" fill="#0f172a">C</text><text x="53" y="52" font-size="14" font-weight="700" fill="#1d4ed8">y°</text><text x="53" y="110" font-size="14" font-weight="600" fill="#0f172a">52°</text><text x="165" y="79" font-size="14" font-weight="600" fill="#0f172a">31°</text></svg>`, options: ["83°", "97°", "101°", "128°"], ans: 1, sol: "y° + 52° + 31° = 180°\ny = 180° - 83° = 97°." },
+      { id: "q29", q: "Given 4p : 12 = 5 : 15, find p.", options: ["1", "2", "3", "4"], ans: 0, sol: "4p / 12 = 5 / 15\np / 3 = 1 / 3 → p = 1." },
+      { id: "q30", q: "Translate \"five times a number decreased by 12\" into an algebraic expression.", options: ["5x + 12", "5x - 12", "12x - 5", "5 - 12x"], ans: 1, sol: "5 times x minus 12 = 5x - 12." },
+      { id: "q31", q: "A fair die is tossed once. Find the probability of obtaining an odd prime number.", options: ["1/6", "1/3", "1/2", "2/3"], ans: 1, sol: "Odd primes on a die: {3, 5} (2 outcomes out of 6).\nProbability = 2/6 = 1/3." },
+      { id: "q32", q: "A learner scores 54 out of 60 marks. Express the score as a percentage.", options: ["80%", "85%", "90%", "95%"], ans: 2, sol: "(54 / 60) × 100% = (9/10) × 100% = 90%." },
+      { id: "q33", q: "Find the equation of a line with gradient 2 and y-intercept -5.", options: ["y = 2x - 5", "y = -2x - 5", "y = 5x + 2", "y = 2x + 5"], ans: 0, sol: "y = mx + c → y = 2x - 5." },
+      { id: "q34", q: "Solve the inequality 3(2x - 1) - 4x > 5.", options: ["x > 4", "x < 4", "x > 1", "x < 1"], ans: 0, sol: "6x - 3 - 4x > 5\n2x > 8\nx > 4." },
+      { id: "q35", q: "The number line represents which inequality?", svg: `<svg width="300" height="70" viewBox="0 0 320 75" xmlns="http://www.w3.org/2000/svg"><line x1="20" y1="45" x2="300" y2="45" stroke="#0f172a" stroke-width="2"/><polygon points="15,45 25,40 25,50" fill="#0f172a"/><polygon points="305,45 295,40 295,50" fill="#0f172a"/><g font-size="12" text-anchor="middle" fill="#0f172a"><line x1="40" y1="40" x2="40" y2="50" stroke="#0f172a"/><text x="40" y="65">-4</text><line x1="70" y1="40" x2="70" y2="50" stroke="#0f172a"/><text x="70" y="65">-3</text><line x1="100" y1="40" x2="100" y2="50" stroke="#0f172a"/><text x="100" y="65">-2</text><line x1="130" y1="40" x2="130" y2="50" stroke="#0f172a"/><text x="130" y="65">-1</text><line x1="160" y1="40" x2="160" y2="50" stroke="#0f172a"/><text x="160" y="65">0</text><line x1="190" y1="40" x2="190" y2="50" stroke="#0f172a"/><text x="190" y="65">1</text><line x1="220" y1="40" x2="220" y2="50" stroke="#0f172a"/><text x="220" y="65">2</text><line x1="250" y1="40" x2="250" y2="50" stroke="#0f172a"/><text x="250" y="65">3</text><line x1="280" y1="40" x2="280" y2="50" stroke="#0f172a"/><text x="280" y="65">4</text></g><line x1="214" y1="22" x2="25" y2="22" stroke="#1d4ed8" stroke-width="3"/><polygon points="18,22 30,16 30,28" fill="#1d4ed8"/><circle cx="220" cy="22" r="6" fill="#ffffff" stroke="#1d4ed8" stroke-width="3"/></svg>`, options: ["x < 2", "x ≤ 2", "x > 2", "x ≥ 2"], ans: 0, sol: "Open circle at 2 (excluded) and arrow pointing left (< 2) → x < 2." },
+      { id: "q36", q: "Round 7,846,391 to the nearest ten thousand.", options: ["7,840,000", "7,846,000", "7,850,000", "7,900,000"], ans: 2, sol: "Ten-thousands digit is 4; thousands digit is 6 (round up) → 7,850,000." },
+      { id: "q37", q: "A triangle has an area of 72 cm² and a perpendicular height of 12 cm. Find its base.", options: ["6 cm", "10 cm", "12 cm", "14 cm"], ans: 2, sol: "72 = (1/2) × b × 12 → 72 = 6b → b = 12 cm." },
+      { id: "q38", q: "A line has equation y = -3x + 8. Which ordered pair lies on the line?", options: ["(2, 2)", "(1, 6)", "(0, 3)", "(3, 2)"], ans: 0, sol: "Test (2, 2): y = -3(2) + 8 = -6 + 8 = 2. Matches!" },
+      { id: "q39", q: "Under the mapping x → 3x - 4, find the image of 9.", options: ["19", "21", "23", "27"], ans: 2, sol: "3(9) - 4 = 27 - 4 = 23." },
+      { id: "q40", q: "Find the LCM of 12, 15 and 20.", options: ["40", "50", "60", "120"], ans: 2, sol: "12 = 2²×3, 15 = 3×5, 20 = 2²×5.\nLCM = 2² × 3 × 5 = 60." }
+    ];
+    const DEMO_QUESTION_IDS = defaultQuestions.map(q => q.id);
+
+    function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+    function getDefaultState() {
+      return {
+        classes: [
+          { id: "c1", name: "SHS 1A" },
+          { id: "c2", name: "SHS 1B" },
+          { id: "c3", name: "SHS 1C" }
+        ],
+        questions: deepClone(defaultQuestions),
+        quizzes: [],
+        submissions: [],
+        receiverEmail: DEFAULT_RECEIVER_EMAIL,
+        adminPassHash: null,
+        demoRemoved: false
+      };
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          const fresh = getDefaultState();
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+          return fresh;
+        }
+        const parsed = JSON.parse(raw);
+        const def = getDefaultState();
+        if (!Array.isArray(parsed.classes) || !parsed.classes.length) parsed.classes = def.classes;
+        if (!Array.isArray(parsed.questions) || !parsed.questions.length) parsed.questions = def.questions;
+        if (!Array.isArray(parsed.quizzes)) parsed.quizzes = [];
+        if (!Array.isArray(parsed.submissions)) parsed.submissions = [];
+        if (!parsed.receiverEmail) parsed.receiverEmail = DEFAULT_RECEIVER_EMAIL;
+        return parsed;
+      } catch {
+        return getDefaultState();
+      }
+    }
+
+    let state = loadState();
+    function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    function getClassName(classId) {
+      const c = state.classes.find(x => x.id === classId);
+      return c ? c.name : "Unassigned";
+    }
+    function showAlert(el, msg, type = "error") {
+      el.textContent = msg;
+      el.className = `alert alert-${type}`;
+    }
+    function hideAlert(el) {
+      el.className = "alert hidden";
+      el.textContent = "";
+    }
+
+    /* Remove untouched demo classes (no quizzes attached) */
+    function pruneDemoClasses() {
+      const before = state.classes.length;
+      state.classes = state.classes.filter(c =>
+        !DEMO_CLASS_IDS.includes(c.id) || state.quizzes.some(q => q.classId === c.id)
+      );
+      return state.classes.length !== before;
+    }
+
+    let session = null;
+    let currentScreenId = "loginScreen";
+    let activeQuiz = null;
+    let reviewSubmission = null;
+    let showMissedOnly = false;
+    let editingClassId = null;
+    let failedAdminAttempts = 0;
+    let adminLockUntil = 0;
+    let pendingSharedQuizId = null;
+    let toastTimer = null;
+
+    function showToast(msg) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
+    }
+
+    const screens = ["loginScreen", "sharedQuizScreen", "studentDashboard", "quizScreen", "resultScreen", "adminDashboard"];
+    function showScreen(id) {
+      currentScreenId = id;
+      screens.forEach(s => document.getElementById(s).classList.toggle("hidden", s !== id));
+    }
+
+    /* ---------------- SHAREABLE QUIZ LINKS ---------------- */
+    function bytesToBase64Url(bytes) {
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function base64UrlToBytes(str) {
+      const b64 = str.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+      const bin = atob(padded);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+    async function encodeShareData(obj) {
+      const bytes = new TextEncoder().encode(JSON.stringify(obj));
+      if (typeof CompressionStream === "function") {
+        try {
+          const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+          const buf = await new Response(stream).arrayBuffer();
+          return "z" + bytesToBase64Url(new Uint8Array(buf));
+        } catch { /* fall back */ }
+      }
+      return "p" + bytesToBase64Url(bytes);
+    }
+    async function decodeShareData(str) {
+      if (!str || str.length < 2) throw new Error("Invalid link");
+      const kind = str[0];
+      let bytes = base64UrlToBytes(str.slice(1));
+      if (kind === "z") {
+        if (typeof DecompressionStream !== "function") throw new Error("Unsupported browser");
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+      } else if (kind !== "p") {
+        throw new Error("Invalid link");
+      }
+      return JSON.parse(new TextDecoder().decode(bytes));
+    }
+
+    async function buildShareUrl(qz) {
+      const payload = {
+        v: 1,
+        id: qz.id,
+        title: qz.title,
+        className: getClassName(qz.classId),
+        minutes: qz.minutes,
+        created: qz.created,
+        receiverEmail: state.receiverEmail,
+        questions: qz.questions
+      };
+      const encoded = await encodeShareData(payload);
+      return `${location.href.split("#")[0]}#shared=${encoded}`;
+    }
+
+    async function initSharedLink() {
+      const hash = location.hash || "";
+      if (!hash.startsWith("#shared=")) return;
+      let data;
+      try {
+        data = await decodeShareData(hash.slice(8));
+      } catch {
+        showAlert(document.getElementById("loginError"), "This quiz link is invalid or broken. Please ask your teacher for a new link.");
+        return;
+      }
+      if (!data || !data.title || !data.className || !Array.isArray(data.questions) || !data.questions.length) {
+        showAlert(document.getElementById("loginError"), "This quiz link is incomplete. Please ask your teacher for a new link.");
+        return;
+      }
+
+      const className = String(data.className).trim();
+      let cls = state.classes.find(c => c.name.toLowerCase() === className.toLowerCase());
+      if (!cls) {
+        cls = { id: "c_" + Date.now(), name: className };
+        state.classes.push(cls);
+      }
+
+      const quizData = {
+        id: data.id || ("qz_" + Date.now()),
+        title: String(data.title),
+        classId: cls.id,
+        minutes: Number(data.minutes) || 45,
+        open: true,
+        created: data.created || new Date().toLocaleDateString(),
+        questions: data.questions
+      };
+      const existing = state.quizzes.find(q => q.id === quizData.id);
+      if (existing) Object.assign(existing, quizData);
+      else state.quizzes.unshift(quizData);
+
+      if (data.receiverEmail) state.receiverEmail = data.receiverEmail;
+      pruneDemoClasses();
+      saveState();
+      populateStudentClassLogin();
+
+      pendingSharedQuizId = quizData.id;
+      document.getElementById("shareQuizTitle").textContent = quizData.title;
+      document.getElementById("shareQuizMeta").textContent =
+        `${className} • ${quizData.questions.length} Questions • ${quizData.minutes} Minutes`;
+      document.getElementById("shareClassInput").value = className;
+      document.getElementById("shareNameInput").value = "";
+      hideAlert(document.getElementById("shareError"));
+      showScreen("sharedQuizScreen");
+      document.getElementById("shareNameInput").focus();
+    }
+
+    function startSharedQuiz(mode) {
+      const errEl = document.getElementById("shareError");
+      const name = document.getElementById("shareNameInput").value.trim();
+      if (!name) return showAlert(errEl, "Please enter your full name before starting.");
+      const qz = state.quizzes.find(q => q.id === pendingSharedQuizId);
+      if (!qz) return showAlert(errEl, "This quiz is no longer available. Please request a new link.");
+      hideAlert(errEl);
+      session = { role: "student", name, classId: qz.classId };
+      setNavSession();
+      startQuiz(qz, mode);
+    }
+    document.getElementById("shareExamBtn").onclick = () => startSharedQuiz("Exam");
+    document.getElementById("sharePracticeBtn").onclick = () => startSharedQuiz("Practice");
+
+    window.addEventListener("storage", (e) => {
+      if (e.key !== STORAGE_KEY) return;
+      if (activeQuiz !== null || currentScreenId === "quizScreen") return;
+      state = loadState();
+      populateStudentClassLogin();
+      if (!session) return;
+      if (session.role === "student" && currentScreenId === "studentDashboard") renderStudentDashboard();
+      if (session.role === "admin" && currentScreenId === "adminDashboard") renderAdminDashboard();
+    });
+
+    /* ---------------- LOGIN ---------------- */
+    document.querySelectorAll(".role-tab").forEach(tab => {
+      tab.onclick = () => {
+        document.querySelectorAll(".role-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        const r = tab.dataset.role;
+        document.getElementById("loginStudentForm").classList.toggle("hidden", r !== "student");
+        document.getElementById("loginAdminForm").classList.toggle("hidden", r !== "admin");
+        document.getElementById("adminPassInput").value = "";
+        hideAlert(document.getElementById("loginError"));
+      };
+    });
+
+    /* Students only see classes that actually have an open quiz */
+    function populateStudentClassLogin() {
+      const sel = document.getElementById("stuClassSelect");
+      const prev = sel.value;
+      sel.innerHTML = "";
+      const available = state.classes.filter(c => state.quizzes.some(q => q.classId === c.id && q.open));
+      available.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.name;
+        sel.appendChild(opt);
+      });
+      if (available.some(c => c.id === prev)) sel.value = prev;
+      document.getElementById("noClassHint").classList.toggle("hidden", available.length > 0);
+      document.getElementById("stuLoginBtn").disabled = available.length === 0;
+    }
+    populateStudentClassLogin();
+
+    function setNavSession() {
+      document.getElementById("navRole").textContent = session.role.toUpperCase();
+      document.getElementById("navUser").textContent =
+        session.role === "student" ? `${session.name} • ${getClassName(session.classId)}` : "Administrator";
+      document.getElementById("navRole").classList.remove("hidden");
+      document.getElementById("navUser").classList.remove("hidden");
+      document.getElementById("logoutBtn").classList.remove("hidden");
+    }
+
+    document.getElementById("stuLoginBtn").onclick = () => {
+      const name = document.getElementById("stuNameInput").value.trim();
+      const classId = document.getElementById("stuClassSelect").value;
+      const errEl = document.getElementById("loginError");
+      if (!name) return showAlert(errEl, "Please enter your Full Name.");
+      if (!classId) return showAlert(errEl, "No quizzes found on this device. Please open the quiz link from your teacher.");
+
+      hideAlert(errEl);
+      session = { role: "student", name, classId };
+      setNavSession();
+      renderStudentDashboard();
+      showScreen("studentDashboard");
+    };
+
+    document.getElementById("adminLoginBtn").onclick = async () => {
+      const errEl = document.getElementById("loginError");
+      const now = Date.now();
+      if (now < adminLockUntil) {
+        const secs = Math.ceil((adminLockUntil - now) / 1000);
+        return showAlert(errEl, `Too many failed attempts. Try again in ${secs} seconds.`);
+      }
+      const pass = document.getElementById("adminPassInput").value;
+      if (!pass) return showAlert(errEl, "Please enter the Admin password.");
+
+      const ok = await verifyAdminPassword(pass);
+      if (!ok) {
+        failedAdminAttempts++;
+        if (failedAdminAttempts >= 5) {
+          adminLockUntil = Date.now() + 30000;
+          failedAdminAttempts = 0;
+          return showAlert(errEl, "Too many failed attempts. Locked for 30 seconds.");
+        }
+        return showAlert(errEl, "Incorrect Admin password.");
+      }
+
+      failedAdminAttempts = 0;
+      document.getElementById("adminPassInput").value = "";
+      hideAlert(errEl);
+      session = { role: "admin", name: "Administrator", classId: null };
+      setNavSession();
+      renderAdminDashboard();
+      showScreen("adminDashboard");
+    };
+
+    document.getElementById("logoutBtn").onclick = () => {
+      if (activeQuiz && activeQuiz.timer) clearInterval(activeQuiz.timer);
+      session = null;
+      activeQuiz = null;
+      editingClassId = null;
+      ["navRole", "navUser", "navTimer", "logoutBtn"].forEach(id => document.getElementById(id).classList.add("hidden"));
+      document.getElementById("adminPassInput").value = "";
+      hideAlert(document.getElementById("loginError"));
+      populateStudentClassLogin();
+      showScreen("loginScreen");
+    };
+
+    /* ---------------- STUDENT DASHBOARD ---------------- */
+    function renderStudentDashboard() {
+      const className = getClassName(session.classId);
+      document.getElementById("stuWelcome").textContent = `Welcome, ${session.name}`;
+      document.getElementById("stuMeta").textContent = `Class: ${className}`;
+
+      const assignedQuizzes = state.quizzes.filter(qz => qz.classId === session.classId && qz.open);
+      const qList = document.getElementById("stuQuizzesList");
+      qList.innerHTML = "";
+
+      if (!assignedQuizzes.length) {
+        const p = document.createElement("p");
+        p.style.color = "var(--muted)";
+        p.textContent = `No open quizzes are available for ${className} right now. Please check back later.`;
+        qList.appendChild(p);
+      } else {
+        assignedQuizzes.forEach(qz => {
+          const card = document.createElement("div");
+          card.className = "quiz-item-card";
+
+          const top = document.createElement("div");
+          const title = document.createElement("h4");
+          title.style.margin = "0 0 6px";
+          title.textContent = qz.title;
+          const meta = document.createElement("div");
+          meta.style.fontSize = "0.88rem";
+          meta.style.color = "var(--muted)";
+          meta.textContent = `${qz.questions.length} Questions • ${qz.minutes} Minutes`;
+          top.append(title, meta);
+
+          const btns = document.createElement("div");
+          btns.className = "action-row";
+          const btnPrac = document.createElement("button");
+          btnPrac.className = "btn btn-primary btn-sm";
+          btnPrac.textContent = "Practice Mode";
+          btnPrac.onclick = () => startQuiz(qz, "Practice");
+          const btnExam = document.createElement("button");
+          btnExam.className = "btn btn-secondary btn-sm";
+          btnExam.textContent = `Exam Mode (${qz.minutes}m)`;
+          btnExam.onclick = () => startQuiz(qz, "Exam");
+          btns.append(btnPrac, btnExam);
+
+          card.append(top, btns);
+          qList.appendChild(card);
+        });
+      }
+
+      const mine = state.submissions.filter(s =>
+        s.studentName.toLowerCase() === session.name.toLowerCase() &&
+        s.classId === session.classId
+      );
+      const tbody = document.getElementById("stuHistoryBody");
+      tbody.innerHTML = "";
+      if (!mine.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 6;
+        td.textContent = "No submissions yet on this device.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      } else {
+        mine.slice().reverse().forEach(sub => {
+          const tr = document.createElement("tr");
+          [sub.quizTitle, sub.mode, `${sub.score} / ${sub.total}`, `${sub.pct}%`, sub.date].forEach(v => {
+            const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+          });
+          const tdAct = document.createElement("td");
+          const btn = document.createElement("button");
+          btn.className = "btn btn-outline btn-sm";
+          btn.textContent = "Review";
+          btn.onclick = () => openResultView(sub, false);
+          tdAct.appendChild(btn);
+          tr.appendChild(tdAct);
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    /* ---------------- QUIZ ENGINE ---------------- */
+    function startQuiz(quiz, mode) {
+      const snapshotQuestions = deepClone(quiz.questions);
+      activeQuiz = {
+        quizId: quiz.id,
+        title: quiz.title,
+        classId: quiz.classId,
+        minutes: quiz.minutes,
+        questions: snapshotQuestions,
+        mode,
+        current: 0,
+        answers: new Array(snapshotQuestions.length).fill(null),
+        secondsLeft: quiz.minutes * 60,
+        timer: null
+      };
+      if (mode === "Exam") {
+        const navTimer = document.getElementById("navTimer");
+        navTimer.classList.remove("hidden");
+        const tick = () => {
+          const m = String(Math.floor(activeQuiz.secondsLeft / 60)).padStart(2, "0");
+          const s = String(activeQuiz.secondsLeft % 60).padStart(2, "0");
+          navTimer.textContent = `⏱ ${m}:${s}`;
+        };
+        tick();
+        activeQuiz.timer = setInterval(() => {
+          activeQuiz.secondsLeft--;
+          tick();
+          if (activeQuiz.secondsLeft <= 0) submitQuiz();
+        }, 1000);
+      }
+      showScreen("quizScreen");
+      renderQuizQuestion();
+    }
+
+    function renderQuizQuestion() {
+      const qs = activeQuiz.questions;
+      const idx = activeQuiz.current;
+      const item = qs[idx];
+      const chosen = activeQuiz.answers[idx];
+      const answered = activeQuiz.answers.filter(a => a !== null).length;
+      const correct = activeQuiz.answers.filter((a, i) => a === qs[i].ans).length;
+
+      document.getElementById("quizActiveTitle").textContent = `${activeQuiz.title} (${activeQuiz.mode} Mode)`;
+      document.getElementById("progressBar").style.width = `${(answered / qs.length) * 100}%`;
+      document.getElementById("qBadge").textContent = `Question ${idx + 1} of ${qs.length}`;
+      document.getElementById("answeredBadge").textContent = `${answered} of ${qs.length} answered`;
+      document.getElementById("sideScore").textContent = `${correct} / ${answered}`;
+      document.getElementById("sideRemain").textContent = qs.length - answered;
+      document.getElementById("qText").textContent = item.q;
+
+      const diag = document.getElementById("qDiagram");
+      if (typeof item.svg === "string" && item.svg.startsWith("<svg") && !/<script|on\w+\s*=|javascript:|<foreignobject|<iframe/i.test(item.svg)) {
+        diag.classList.remove("hidden");
+        diag.innerHTML = item.svg;
+      } else {
+        diag.classList.add("hidden");
+        diag.innerHTML = "";
+      }
+
+      const box = document.getElementById("optionsBox");
+      box.innerHTML = "";
+      item.options.forEach((opt, oIdx) => {
+        const btn = document.createElement("button");
+        btn.className = "opt-btn";
+        const ls = document.createElement("span");
+        ls.className = "opt-letter";
+        ls.textContent = letters[oIdx];
+        const ts = document.createElement("span");
+        ts.textContent = opt;
+        btn.append(ls, ts);
+
+        if (chosen !== null) {
+          btn.disabled = true;
+          if (oIdx === item.ans) btn.classList.add("correct");
+          if (oIdx === chosen && chosen !== item.ans) btn.classList.add("wrong");
+        }
+        btn.onclick = () => {
+          if (activeQuiz.answers[idx] !== null) return;
+          activeQuiz.answers[idx] = oIdx;
+          renderQuizQuestion();
+        };
+        box.appendChild(btn);
+      });
+
+      const fb = document.getElementById("feedbackBox");
+      fb.innerHTML = "";
+      if (chosen !== null) {
+        const ok = chosen === item.ans;
+        fb.className = `feedback show ${ok ? "correct" : "wrong"}`;
+        const title = document.createElement("div");
+        title.style.fontWeight = "700";
+        if (ok) {
+          title.textContent = "Correct! Well done.";
+          fb.appendChild(title);
+        } else {
+          title.textContent = `Incorrect. You chose ${letters[chosen]} (${item.options[chosen]}). Correct answer: ${letters[item.ans]} (${item.options[item.ans]}).`;
+          const sol = document.createElement("div");
+          sol.className = "solution-box";
+          const st = document.createElement("strong");
+          st.textContent = "Step-by-Step Worked Solution:\n";
+          sol.append(st, document.createTextNode(item.sol));
+          fb.append(title, sol);
+        }
+      } else {
+        fb.className = "feedback";
+      }
+
+      const grid = document.getElementById("paletteGrid");
+      grid.innerHTML = "";
+      qs.forEach((q, qIdx) => {
+        const dot = document.createElement("button");
+        dot.className = "p-dot";
+        dot.textContent = qIdx + 1;
+        if (qIdx === idx) dot.classList.add("active");
+        if (activeQuiz.answers[qIdx] !== null) {
+          dot.classList.add(activeQuiz.answers[qIdx] === q.ans ? "p-correct" : "p-wrong");
+        }
+        dot.onclick = () => { activeQuiz.current = qIdx; renderQuizQuestion(); };
+        grid.appendChild(dot);
+      });
+
+      document.getElementById("prevBtn").disabled = idx === 0;
+      document.getElementById("nextBtn").textContent = idx === qs.length - 1 ? "Submit & Send Score →" : "Next Question →";
+    }
+
+    document.getElementById("prevBtn").onclick = () => { if (activeQuiz.current > 0) { activeQuiz.current--; renderQuizQuestion(); } };
+    document.getElementById("nextBtn").onclick = () => {
+      if (activeQuiz.current < activeQuiz.questions.length - 1) { activeQuiz.current++; renderQuizQuestion(); }
+      else submitQuiz();
+    };
+    document.getElementById("finishEarlyBtn").onclick = () => { if (activeQuiz) submitQuiz(); };
+
+    function submitQuiz() {
+      if (!activeQuiz) return;
+      if (activeQuiz.timer) clearInterval(activeQuiz.timer);
+      document.getElementById("navTimer").classList.add("hidden");
+
+      const qs = activeQuiz.questions;
+      const total = qs.length;
+      const score = activeQuiz.answers.filter((a, i) => a === qs[i].ans).length;
+      const pct = Math.round((score / total) * 100);
+      const sub = {
+        id: "sub_" + Date.now(),
+        quizId: activeQuiz.quizId,
+        quizTitle: activeQuiz.title,
+        classId: activeQuiz.classId,
+        className: getClassName(activeQuiz.classId),
+        studentName: session.name,
+        mode: activeQuiz.mode,
+        score,
+        total,
+        pct,
+        date: new Date().toLocaleString(),
+        questions: deepClone(qs),
+        answers: activeQuiz.answers.slice()
+      };
+      state.submissions.push(sub);
+      saveState();
+      activeQuiz = null;
+      openResultView(sub, true);
+    }
+
+    /* ---------------- EMAIL HOOK ---------------- */
+    async function sendSubmissionToEmail(sub) {
+      const targetEmail = state.receiverEmail || DEFAULT_RECEIVER_EMAIL;
+      const banner = document.getElementById("emailDeliveryBanner");
+      const fallbackWrap = document.getElementById("emailFallbackWrap");
+      const mailtoBtn = document.getElementById("mailtoFallbackBtn");
+
+      const missedList = sub.questions
+        .map((q, i) => sub.answers[i] !== q.ans ? `Q${i + 1}` : null)
+        .filter(Boolean);
+      const missedText = missedList.length ? missedList.join(", ") : "None (100% score)";
+
+      const subject = `GBAT Quiz Score: ${sub.studentName} (${sub.className}) - ${sub.score}/${sub.total} (${sub.pct}%)`;
+      const summaryBody =
+        `Student Name: ${sub.studentName}\n` +
+        `Class: ${sub.className}\n` +
+        `Quiz: ${sub.quizTitle}\n` +
+        `Mode: ${sub.mode}\n` +
+        `Score: ${sub.score} / ${sub.total} (${sub.pct}%)\n` +
+        `Missed Questions: ${missedText}\n` +
+        `Submitted At: ${sub.date}`;
+
+      mailtoBtn.href = `mailto:${encodeURIComponent(targetEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(summaryBody)}`;
+      fallbackWrap.classList.add("hidden");
+      showAlert(banner, `Sending results to ${targetEmail}...`, "info");
+
+      try {
+        const res = await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(targetEmail)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({
+            _subject: subject,
+            _template: "table",
+            Student_Name: sub.studentName,
+            Class: sub.className,
+            Quiz_Title: sub.quizTitle,
+            Mode: sub.mode,
+            Score: `${sub.score} / ${sub.total}`,
+            Percentage: `${sub.pct}%`,
+            Missed_Questions: missedText,
+            Submitted_At: sub.date
+          })
+        });
+        const data = await res.json();
+        if (res.ok && (data.success === "true" || data.success === true)) {
+          showAlert(banner, "Your result has been sent to your teacher!", "success");
+        } else {
+          throw new Error(data.message || "Email service requires activation or failed.");
+        }
+      } catch (err) {
+        const reason = err && err.message ? err.message : "Network or service error.";
+        if (/activat/i.test(reason)) {
+          showAlert(
+            banner,
+            `One-time activation needed: open the FormSubmit "Activate Form" email sent to ${targetEmail} (check Spam/Junk) and click the activation link. Then submit again.`,
+            "error"
+          );
+        } else {
+          showAlert(
+            banner,
+            `Could not auto-send directly (${reason}). Use the button below to send via your Email App.`,
+            "error"
+          );
+        }
+        fallbackWrap.classList.remove("hidden");
+      }
+    }
+
+    function openResultView(sub, sendEmailNow) {
+      reviewSubmission = sub;
+      showMissedOnly = false;
+      document.getElementById("resMissedBtn").textContent = "Show Missed Only";
+      document.getElementById("resQuizBadge").textContent = `${sub.quizTitle} • ${sub.className || getClassName(sub.classId)}`;
+      document.getElementById("resStudentTitle").textContent = `${sub.studentName} — ${sub.mode} Mode`;
+      document.getElementById("resScoreBig").textContent = `${sub.score} / ${sub.total} (${sub.pct}%)`;
+      document.getElementById("resRemark").textContent =
+        sub.pct >= 80 ? "Excellent mastery! Review any missed questions below." :
+        sub.pct >= 50 ? "Good effort! Study the worked solutions for the questions you missed." :
+        "Keep practicing! Carefully review every worked solution below.";
+
+      if (sendEmailNow) {
+        sendSubmissionToEmail(sub);
+      } else {
+        hideAlert(document.getElementById("emailDeliveryBanner"));
+        document.getElementById("emailFallbackWrap").classList.add("hidden");
+      }
+
+      renderResultReview();
+      showScreen("resultScreen");
+    }
+
+    function renderResultReview() {
+      const list = document.getElementById("resReviewList");
+      list.innerHTML = "";
+      (reviewSubmission.questions || []).forEach((item, idx) => {
+        const chosen = reviewSubmission.answers[idx];
+        const ok = chosen === item.ans;
+        if (showMissedOnly && ok) return;
+
+        const div = document.createElement("div");
+        div.className = `review-item ${ok ? "passed" : "missed"}`;
+        const qt = document.createElement("div");
+        qt.style.fontWeight = "700";
+        qt.textContent = `Q${idx + 1}. ${item.q}`;
+        const st = document.createElement("div");
+        st.style.fontSize = "0.9rem";
+        st.style.margin = "6px 0";
+        const chosenTxt = chosen === null || chosen === undefined ? "Unanswered" : `${letters[chosen]} (${item.options[chosen]})`;
+        st.textContent = `Selected: ${chosenTxt} | Correct: ${letters[item.ans]} (${item.options[item.ans]})`;
+        div.append(qt, st);
+
+        if (!ok) {
+          const sb = document.createElement("div");
+          sb.className = "solution-box";
+          const b = document.createElement("strong");
+          b.textContent = "Step-by-Step Solution:\n";
+          sb.append(b, document.createTextNode(item.sol));
+          div.appendChild(sb);
+        }
+        list.appendChild(div);
+      });
+    }
+
+    document.getElementById("resMissedBtn").onclick = () => {
+      showMissedOnly = !showMissedOnly;
+      document.getElementById("resMissedBtn").textContent = showMissedOnly ? "Show All Questions" : "Show Missed Only";
+      renderResultReview();
+    };
+    document.getElementById("resBackBtn").onclick = () => {
+      if (session.role === "admin") { renderAdminDashboard(); showScreen("adminDashboard"); }
+      else { renderStudentDashboard(); showScreen("studentDashboard"); }
+    };
+
+    /* ---------------- ADMIN DASHBOARD ---------------- */
+    document.querySelectorAll("#adminTabs .sub-tab").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#adminTabs .sub-tab").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        ["aQuizzes", "aClasses", "aBank", "aSubmissions", "aSettings"].forEach(id =>
+          document.getElementById(id).classList.toggle("hidden", id !== btn.dataset.tab)
+        );
+      };
+    });
+
+    function renderAdminDashboard() {
+      document.getElementById("adminMeta").textContent = `Results hooked to: ${state.receiverEmail}`;
+      document.getElementById("subTargetEmailLabel").textContent = state.receiverEmail;
+      document.getElementById("aKpiQuizzes").textContent = state.quizzes.length;
+      document.getElementById("aKpiClasses").textContent = state.classes.length;
+      document.getElementById("aKpiBank").textContent = state.questions.length;
+      document.getElementById("aKpiSubs").textContent = state.submissions.length;
+
+      renderAdminQuizCreator();
+      renderAdminQuizzesTable();
+      renderAdminClasses();
+      renderAdminBank();
+      renderAdminSubmissions();
+      document.getElementById("aEmailInput").value = state.receiverEmail;
+    }
+
+    function renderAdminQuizCreator() {
+      const clsSel = document.getElementById("qzClassSelect");
+      const prev = clsSel.value;
+      clsSel.innerHTML = "";
+      state.classes.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.name;
+        clsSel.appendChild(opt);
+      });
+      if (state.classes.some(c => c.id === prev)) clsSel.value = prev;
+
+      const checklist = document.getElementById("qzChecklist");
+      const checkedIds = new Set(Array.from(checklist.querySelectorAll("input:checked")).map(cb => cb.value));
+      checklist.innerHTML = "";
+
+      state.questions.forEach((q, idx) => {
+        const label = document.createElement("label");
+        label.className = "check-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = q.id;
+        cb.checked = checkedIds.has(q.id);
+        cb.onchange = updateQuizChecklistCount;
+        const txt = document.createElement("span");
+        txt.textContent = `Q${idx + 1}. ${q.q}`;
+        label.append(cb, txt);
+        checklist.appendChild(label);
+      });
+      updateQuizChecklistCount();
+    }
+
+    function updateQuizChecklistCount() {
+      const all = document.querySelectorAll("#qzChecklist input[type='checkbox']");
+      const checked = document.querySelectorAll("#qzChecklist input[type='checkbox']:checked");
+      document.getElementById("qzSelectedCount").textContent = checked.length;
+      document.getElementById("qzSelectAll").checked = all.length > 0 && checked.length === all.length;
+    }
+
+    document.getElementById("qzSelectAll").onchange = (e) => {
+      document.querySelectorAll("#qzChecklist input[type='checkbox']").forEach(cb => cb.checked = e.target.checked);
+      updateQuizChecklistCount();
+    };
+
+    document.getElementById("createQuizBtn").onclick = () => {
+      const msgEl = document.getElementById("qzFormMsg");
+      const title = document.getElementById("qzTitleInput").value.trim();
+      const classId = document.getElementById("qzClassSelect").value;
+      const minutes = Number(document.getElementById("qzMinutesInput").value);
+      const selectedIds = Array.from(document.querySelectorAll("#qzChecklist input:checked")).map(cb => cb.value);
+
+      if (!title) return showAlert(msgEl, "Please enter a quiz title.");
+      if (!classId) return showAlert(msgEl, "Please select a class.");
+      if (!minutes || minutes < 1) return showAlert(msgEl, "Duration must be at least 1 minute.");
+      if (!selectedIds.length) return showAlert(msgEl, "Select at least one question from the bank.");
+
+      const snapshot = deepClone(state.questions.filter(q => selectedIds.includes(q.id)));
+      state.quizzes.unshift({
+        id: "qz_" + Date.now(),
+        title,
+        classId,
+        minutes,
+        open: true,
+        created: new Date().toLocaleDateString(),
+        questions: snapshot
+      });
+      saveState();
+
+      document.getElementById("qzTitleInput").value = "";
+      document.getElementById("qzSelectAll").checked = false;
+      document.querySelectorAll("#qzChecklist input").forEach(cb => cb.checked = false);
+      updateQuizChecklistCount();
+      renderAdminDashboard();
+      showAlert(msgEl, `Quiz "${title}" published for ${getClassName(classId)}! Use "Copy Link" below to send it to students.`, "success");
+    };
+
+    function renderAdminQuizzesTable() {
+      const tbody = document.getElementById("aQuizzesBody");
+      tbody.innerHTML = "";
+      if (!state.quizzes.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 6;
+        td.textContent = "No quizzes created yet. Use the form above to publish a quiz.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      state.quizzes.forEach((qz, idx) => {
+        const tr = document.createElement("tr");
+        [qz.title, getClassName(qz.classId), qz.questions.length, `${qz.minutes} mins`].forEach(val => {
+          const td = document.createElement("td"); td.textContent = val; tr.appendChild(td);
+        });
+
+        const tdSt = document.createElement("td");
+        const badge = document.createElement("span");
+        badge.className = `badge ${qz.open ? "b-green" : "b-gray"}`;
+        badge.textContent = qz.open ? "Open" : "Closed";
+        tdSt.appendChild(badge);
+
+        const tdAct = document.createElement("td");
+        tdAct.className = "action-row";
+        const share = document.createElement("button");
+        share.className = "btn btn-primary btn-sm";
+        share.textContent = "Copy Link";
+        share.title = "Copy a link that lets students take this quiz";
+        share.onclick = async () => {
+          share.disabled = true;
+          share.textContent = "Preparing...";
+          try {
+            const url = await buildShareUrl(qz);
+            try {
+              await navigator.clipboard.writeText(url);
+              showToast("Student link copied! Paste it in WhatsApp, email, or your class group.");
+            } catch {
+              window.prompt("Copy this quiz link and send it to your students:", url);
+            }
+          } catch {
+            showToast("Could not create the quiz link. Please try again.");
+          } finally {
+            share.disabled = false;
+            share.textContent = "Copy Link";
+          }
+        };
+        const tog = document.createElement("button");
+        tog.className = "btn btn-outline btn-sm";
+        tog.textContent = qz.open ? "Close" : "Open";
+        tog.onclick = () => { qz.open = !qz.open; saveState(); renderAdminDashboard(); };
+
+        const del = document.createElement("button");
+        del.className = "btn btn-danger btn-sm";
+        del.textContent = "Delete";
+        del.onclick = () => {
+          if (!confirm(`Delete quiz "${qz.title}"?`)) return;
+          state.quizzes.splice(idx, 1);
+          saveState();
+          renderAdminDashboard();
+        };
+
+        tdAct.append(share, tog, del);
+        tr.append(tdSt, tdAct);
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderAdminClasses() {
+      const tbody = document.getElementById("aClassesBody");
+      tbody.innerHTML = "";
+      const classMsg = document.getElementById("aClassMsg");
+
+      state.classes.forEach((cls, idx) => {
+        const qCount = state.quizzes.filter(q => q.classId === cls.id).length;
+        const tr = document.createElement("tr");
+        const tdName = document.createElement("td");
+
+        if (editingClassId === cls.id) {
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.value = cls.name;
+          inp.id = `editCls_${cls.id}`;
+          inp.style.padding = "6px 10px";
+          inp.style.border = "1px solid var(--border)";
+          inp.style.borderRadius = "6px";
+          tdName.appendChild(inp);
+        } else {
+          tdName.textContent = cls.name;
+          tdName.style.fontWeight = "600";
+        }
+
+        const tdQ = document.createElement("td"); tdQ.textContent = qCount;
+        const tdAct = document.createElement("td");
+        tdAct.className = "action-row";
+
+        if (editingClassId === cls.id) {
+          const saveBtn = document.createElement("button");
+          saveBtn.className = "btn btn-success btn-sm";
+          saveBtn.textContent = "Save";
+          saveBtn.onclick = () => {
+            const val = document.getElementById(`editCls_${cls.id}`).value.trim();
+            if (!val) return showAlert(classMsg, "Class name cannot be empty.");
+            if (state.classes.some(c => c.id !== cls.id && c.name.toLowerCase() === val.toLowerCase())) {
+              return showAlert(classMsg, `Class "${val}" already exists.`);
+            }
+            cls.name = val;
+            editingClassId = null;
+            saveState();
+            renderAdminDashboard();
+            showAlert(classMsg, `Class renamed to "${val}". Copy fresh quiz links so students see the new name.`, "success");
+          };
+          const cancelBtn = document.createElement("button");
+          cancelBtn.className = "btn btn-secondary btn-sm";
+          cancelBtn.textContent = "Cancel";
+          cancelBtn.onclick = () => { editingClassId = null; renderAdminClasses(); };
+          tdAct.append(saveBtn, cancelBtn);
+        } else {
+          const renBtn = document.createElement("button");
+          renBtn.className = "btn btn-outline btn-sm";
+          renBtn.textContent = "Rename";
+          renBtn.onclick = () => { editingClassId = cls.id; hideAlert(classMsg); renderAdminClasses(); };
+
+          const delBtn = document.createElement("button");
+          delBtn.className = "btn btn-danger btn-sm";
+          delBtn.textContent = "Delete";
+          delBtn.onclick = () => {
+            if (qCount > 0) {
+              return showAlert(classMsg, `Cannot delete "${cls.name}" because ${qCount} quiz(zes) are assigned to it. Delete or move those quizzes first.`);
+            }
+            if (state.classes.length <= 1) {
+              return showAlert(classMsg, "At least one class must remain.");
+            }
+            state.classes.splice(idx, 1);
+            saveState();
+            renderAdminDashboard();
+            showAlert(classMsg, `Deleted class "${cls.name}".`, "success");
+          };
+          tdAct.append(renBtn, delBtn);
+        }
+
+        tr.append(tdName, tdQ, tdAct);
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById("aAddClassBtn").onclick = () => {
+      const msgEl = document.getElementById("aClassMsg");
+      const name = document.getElementById("aNewClassName").value.trim();
+      if (!name) return showAlert(msgEl, "Please enter a class name.");
+      if (state.classes.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+        return showAlert(msgEl, `Class "${name}" already exists.`);
+      }
+      state.classes.push({ id: "c_" + Date.now(), name });
+      saveState();
+      document.getElementById("aNewClassName").value = "";
+      renderAdminDashboard();
+      showAlert(msgEl, `Class "${name}" created!`, "success");
+    };
+
+    function renderAdminBank() {
+      document.getElementById("qBankCount").textContent = state.questions.length;
+      document.getElementById("clearBankBtn").classList.toggle("hidden", !state.questions.some(q => DEMO_QUESTION_IDS.includes(q.id)));
+      const tbody = document.getElementById("aQuestionsBody");
+      tbody.innerHTML = "";
+      state.questions.forEach((q, idx) => {
+        const tr = document.createElement("tr");
+        const td1 = document.createElement("td"); td1.textContent = idx + 1;
+        const td2 = document.createElement("td"); td2.textContent = q.q;
+        const td3 = document.createElement("td"); td3.textContent = `${letters[q.ans]} (${q.options[q.ans]})`;
+        const tdSol = document.createElement("td");
+        tdSol.textContent = q.sol || "No explanation provided.";
+        tdSol.title = q.sol || "";
+        tdSol.style.maxWidth = "260px";
+        tdSol.style.overflow = "hidden";
+        tdSol.style.textOverflow = "ellipsis";
+        tdSol.style.whiteSpace = "nowrap";
+        const td4 = document.createElement("td");
+        const del = document.createElement("button");
+        del.className = "btn btn-danger btn-sm";
+        del.textContent = "Delete";
+        del.onclick = () => {
+          if (state.questions.length <= 1) return alert("At least 1 question must remain.");
+          state.questions.splice(idx, 1);
+          saveState();
+          renderAdminDashboard();
+        };
+        td4.appendChild(del);
+        tr.append(td1, td2, td3, tdSol, td4);
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById("clearBankBtn").onclick = () => {
+      const msgEl = document.getElementById("qBankMsg");
+      const custom = state.questions.filter(q => !DEMO_QUESTION_IDS.includes(q.id));
+      if (!custom.length) return showAlert(msgEl, "Add or import your own questions first, then delete the demo ones.");
+      if (!confirm("Delete all built-in demo questions? Your own questions and existing quizzes are kept.")) return;
+      state.questions = custom;
+      saveState();
+      renderAdminDashboard();
+      showAlert(msgEl, "Demo questions deleted.", "success");
+    };
+
+    document.getElementById("addQuestionBtn").onclick = () => {
+      const msgEl = document.getElementById("qBankMsg");
+      const q = document.getElementById("newQText").value.trim();
+      const options = ["newOptA", "newOptB", "newOptC", "newOptD"].map(id => document.getElementById(id).value.trim());
+      const ans = Number(document.getElementById("newQAns").value);
+      const sol = document.getElementById("newQSol").value.trim();
+      if (!q || options.some(o => !o) || !sol) {
+        return showAlert(msgEl, "Please fill in the question, all 4 options, and the worked solution.");
+      }
+      state.questions.push({ id: "q_" + Date.now(), q, options, ans, sol });
+      saveState();
+      ["newQText", "newOptA", "newOptB", "newOptC", "newOptD", "newQSol"].forEach(id => document.getElementById(id).value = "");
+      renderAdminDashboard();
+      showAlert(msgEl, "Question added to bank!", "success");
+    };
+
+    /* ---------------- BULK QUESTION IMPORT ---------------- */
+    const IMPORT_HEADER_ALIASES = {
+      q: ["question", "questiontext", "q", "text", "prompt"],
+      a: ["optiona", "option1", "a", "choicea", "choice1"],
+      b: ["optionb", "option2", "b", "choiceb", "choice2"],
+      c: ["optionc", "option3", "c", "choicec", "choice3"],
+      d: ["optiond", "option4", "d", "choiced", "choice4"],
+      answer: ["answer", "correct", "correctanswer", "correctoption", "ans", "key"],
+      solution: ["solution", "explanation", "workedsolution", "steps", "workings", "reason"],
+      svg: ["svg", "diagram", "image"]
+    };
+
+    function importNormHeader(h) { return String(h == null ? "" : h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
+    function importNormQuestionText(t) { return String(t == null ? "" : t).trim().toLowerCase().replace(/\s+/g, " "); }
+    function csvEscape(v) {
+      const s = String(v == null ? "" : v);
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }
+
+    function parseDelimited(text, delimiter) {
+      const rows = [];
+      let row = [], field = "", inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (text[i + 1] === '"') { field += '"'; i++; }
+            else inQuotes = false;
+          } else {
+            field += ch;
+          }
+        } else if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === delimiter) {
+          row.push(field); field = "";
+        } else if (ch === "\n") {
+          row.push(field); rows.push(row); row = []; field = "";
+        } else if (ch !== "\r") {
+          field += ch;
+        }
+      }
+      if (field.length || row.length) { row.push(field); rows.push(row); }
+      return rows.filter(r => r.some(c => String(c).trim() !== ""));
+    }
+
+    function detectImportDelimiter(text) {
+      const sample = text.split(/\r?\n/).slice(0, 5).join("\n");
+      const candidates = [",", "\t", "|", ";"];
+      let best = ",", bestCount = -1;
+      candidates.forEach(d => {
+        const count = sample.split(d).length - 1;
+        if (count > bestCount) { best = d; bestCount = count; }
+      });
+      return bestCount > 0 ? best : ",";
+    }
+
+    function importNormalizeAnswer(value, options) {
+      const v = String(value == null ? "" : value).trim();
+      if (!v) return -1;
+      const exact = options.findIndex(o => o.toLowerCase() === v.toLowerCase());
+      if (exact !== -1) return exact;
+      const letterMatch = v.match(/^\(?([A-Da-d])\)?\s*(?:[\).:\-]\s*)?(.*)$/);
+      if (letterMatch) {
+        const idx = letters.indexOf(letterMatch[1].toUpperCase());
+        const rest = letterMatch[2].trim();
+        if (idx !== -1 && (!rest || options[idx].toLowerCase() === rest.toLowerCase())) return idx;
+      }
+      if (/^[1-4]$/.test(v)) return Number(v) - 1;
+      return -1;
+    }
+
+    function importValidateSvg(svg) {
+      const s = String(svg == null ? "" : svg).trim();
+      if (!s) return "";
+      if (!s.startsWith("<svg")) throw new Error("SVG must start with <svg");
+      if (/<script|on\w+\s*=|javascript:|<foreignobject|<iframe/i.test(s)) {
+        throw new Error("SVG contains unsafe content");
+      }
+      return s;
+    }
+
+    function makeImportedQuestion(rec) {
+      const q = String(rec.q == null ? "" : rec.q).trim();
+      const options = (rec.options || []).map(o => String(o == null ? "" : o).trim());
+      if (!q) throw new Error("Missing question text");
+      if (options.length !== 4 || options.some(o => !o)) throw new Error("Exactly 4 non-empty options are required");
+      const ans = importNormalizeAnswer(rec.answer, options);
+      if (ans === -1) throw new Error("Correct answer must be A, B, C, D, 1-4, or match an option");
+      const sol = String(rec.solution == null ? "" : rec.solution).trim() || "No explanation provided.";
+      const svg = importValidateSvg(rec.svg);
+      const question = { id: "q_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), q, options, ans, sol };
+      if (svg) question.svg = svg;
+      return question;
+    }
+
+    function importFindHeaderMap(row) {
+      const map = {};
+      (row || []).forEach((cell, idx) => {
+        const n = importNormHeader(cell);
+        Object.keys(IMPORT_HEADER_ALIASES).forEach(key => {
+          if (map[key] === undefined && IMPORT_HEADER_ALIASES[key].includes(n)) map[key] = idx;
+        });
+      });
+      const optionCount = ["a", "b", "c", "d"].filter(k => map[k] !== undefined).length;
+      return map.q !== undefined && map.answer !== undefined && optionCount >= 2 ? map : null;
+    }
+
+    function importRecordsFromRows(rawRows) {
+      const rows = (rawRows || []).map(r => (r || []).map(c => c == null ? "" : String(c)));
+      if (!rows.length) return { records: [], errors: ["The file is empty."] };
+      const headerMap = importFindHeaderMap(rows[0]);
+      const colMap = headerMap || { q: 0, a: 1, b: 2, c: 3, d: 4, answer: 5, solution: 6, svg: 7 };
+      const start = headerMap ? 1 : 0;
+      const records = [], errors = [];
+      rows.slice(start).forEach((row, i) => {
+        if (row.every(c => c.trim() === "")) return;
+        const get = k => colMap[k] === undefined ? "" : row[colMap[k]];
+        try {
+          records.push(makeImportedQuestion({
+            q: get("q"),
+            options: [get("a"), get("b"), get("c"), get("d")],
+            answer: get("answer"),
+            solution: get("solution"),
+            svg: get("svg")
+          }));
+        } catch (err) {
+          errors.push(`Row ${start + i + 1}: ${err.message}`);
+        }
+      });
+      return { records, errors };
+    }
+
+    function importRecordsFromJson(text) {
+      let data;
+      try { data = JSON.parse(text); }
+      catch { throw new Error("The JSON file could not be read. Check for missing commas or brackets."); }
+      let list;
+      if (Array.isArray(data)) list = data;
+      else if (data && Array.isArray(data.questions)) list = data.questions;
+      else if (data && typeof data === "object") list = [data];
+      else throw new Error("JSON must contain an array of questions.");
+
+      const records = [], errors = [];
+      list.forEach((item, i) => {
+        if (!item || typeof item !== "object") { errors.push(`Item ${i + 1}: not a question object`); return; }
+        let options = item.options;
+        if (typeof options === "string") options = options.split("|");
+        if (!Array.isArray(options)) {
+          options = [item.optionA ?? item.a ?? item.A, item.optionB ?? item.b ?? item.B, item.optionC ?? item.c ?? item.C, item.optionD ?? item.d ?? item.D];
+        }
+        try {
+          records.push(makeImportedQuestion({
+            q: item.q ?? item.question ?? item.text ?? item.prompt ?? "",
+            options,
+            answer: item.ans ?? item.answer ?? item.correct ?? item.correctAnswer ?? item.key ?? "",
+            solution: item.sol ?? item.solution ?? item.explanation ?? item.steps ?? "",
+            svg: item.svg ?? item.diagram ?? ""
+          }));
+        } catch (err) {
+          errors.push(`Item ${i + 1}: ${err.message}`);
+        }
+      });
+      return { records, errors };
+    }
+
+    function loadSpreadsheetParser() {
+      if (window.XLSX) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("Could not load the Excel parser. Check your internet connection or upload a CSV file instead."));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function parseQuestionFile(file) {
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!["csv", "tsv", "txt", "json", "xlsx", "xls", "xlsm", "ods"].includes(ext)) {
+        throw new Error(`Unsupported file type ".${ext}". Please use CSV, Excel, JSON, TSV or TXT.`);
+      }
+      if (["xlsx", "xls", "xlsm", "ods"].includes(ext)) {
+        await loadSpreadsheetParser();
+        const buf = await file.arrayBuffer();
+        const wb = window.XLSX.read(buf, { type: "array" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        return importRecordsFromRows(rows);
+      }
+      const text = await file.text();
+      if (ext === "json") return importRecordsFromJson(text);
+      const delimiter = ext === "tsv" ? "\t" : detectImportDelimiter(text);
+      return importRecordsFromRows(parseDelimited(text, delimiter));
+    }
+
+    document.getElementById("importQuestionsBtn").onclick = async () => {
+      const msgEl = document.getElementById("importMsg");
+      const input = document.getElementById("importFileInput");
+      const file = input.files && input.files[0];
+      if (!file) return showAlert(msgEl, "Please choose a file to import.");
+      if (file.size > 5 * 1024 * 1024) return showAlert(msgEl, "File is too large. Please keep imports under 5 MB.");
+
+      const btn = document.getElementById("importQuestionsBtn");
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Importing...";
+      try {
+        const result = await parseQuestionFile(file);
+        const seen = new Set(state.questions.map(q => importNormQuestionText(q.q)));
+        const imported = [];
+        const errors = result.errors.slice();
+        result.records.forEach((rec, i) => {
+          const key = importNormQuestionText(rec.q);
+          if (seen.has(key)) {
+            errors.push(`Item ${i + 1}: duplicate question skipped`);
+            return;
+          }
+          seen.add(key);
+          imported.push(rec);
+        });
+
+        if (!imported.length) {
+          const detail = errors.length ? ` ${errors.slice(0, 5).join(" | ")}` : "";
+          return showAlert(msgEl, `No questions were imported.${detail}`, "error");
+        }
+
+        state.questions.push(...imported);
+        saveState();
+        renderAdminDashboard();
+        input.value = "";
+        const warn = errors.length ? ` Skipped ${errors.length}: ${errors.slice(0, 3).join(" | ")}` : "";
+        showAlert(msgEl, `Imported ${imported.length} question(s).${warn}`, errors.length ? "info" : "success");
+      } catch (err) {
+        showAlert(msgEl, err && err.message ? err.message : "Could not read that file.", "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    };
+
+    document.getElementById("downloadTemplateBtn").onclick = () => {
+      const headers = ["question", "optionA", "optionB", "optionC", "optionD", "answer", "solution", "svg"];
+      const sample = ["What is 2 + 2?", "1", "2", "3", "4", "D", "Add the two numbers: 2 + 2 = 4.", ""];
+      const csv = [headers, sample].map(row => row.map(csvEscape).join(",")).join("\r\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "gbat_questions_template.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+
+    document.getElementById("shuffleBankBtn").onclick = () => {
+      const msgEl = document.getElementById("qBankMsg");
+      if (state.questions.length < 2) {
+        return showAlert(msgEl, "Add at least 2 questions before shuffling.");
+      }
+      for (let i = state.questions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [state.questions[i], state.questions[j]] = [state.questions[j], state.questions[i]];
+      }
+      saveState();
+      renderAdminDashboard();
+      showAlert(msgEl, "Question bank shuffled! New quizzes will use the new order.", "success");
+    };
+
+    function renderAdminSubmissions() {
+      const filter = document.getElementById("aSearchSubs").value.trim().toLowerCase();
+      const tbody = document.getElementById("aSubsBody");
+      tbody.innerHTML = "";
+      const list = state.submissions.slice().reverse().filter(s =>
+        s.studentName.toLowerCase().includes(filter) ||
+        (s.className || getClassName(s.classId)).toLowerCase().includes(filter) ||
+        s.quizTitle.toLowerCase().includes(filter)
+      );
+
+      if (!list.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 8;
+        td.textContent = "No submissions recorded on this browser yet.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      list.forEach(sub => {
+        const tr = document.createElement("tr");
+        const cName = sub.className || getClassName(sub.classId);
+        [sub.studentName, cName, sub.quizTitle, sub.mode, `${sub.score}/${sub.total}`, `${sub.pct}%`, sub.date].forEach(v => {
+          const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+        });
+        const tdAct = document.createElement("td");
+        const btn = document.createElement("button");
+        btn.className = "btn btn-outline btn-sm";
+        btn.textContent = "Inspect";
+        btn.onclick = () => openResultView(sub, false);
+        tdAct.appendChild(btn);
+        tr.appendChild(tdAct);
+        tbody.appendChild(tr);
+      });
+    }
+    document.getElementById("aSearchSubs").oninput = renderAdminSubmissions;
+
+    document.getElementById("exportCsvBtn").onclick = () => {
+      const rows = [["Student Name", "Class", "Quiz", "Mode", "Score", "Total", "Percentage", "Date"]];
+      state.submissions.forEach(s => {
+        rows.push([s.studentName, s.className || getClassName(s.classId), s.quizTitle, s.mode, s.score, s.total, `${s.pct}%`, s.date]);
+      });
+      const blob = new Blob([rows.map(r => r.map(csvEscape).join(",")).join("\n")], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "gbat_submissions.csv";
+      a.click();
+    };
+
+    document.getElementById("aSaveEmailBtn").onclick = () => {
+      const msgEl = document.getElementById("aEmailMsg");
+      const em = document.getElementById("aEmailInput").value.trim();
+      if (!em || !em.includes("@")) return showAlert(msgEl, "Please enter a valid email address.");
+      state.receiverEmail = em;
+      saveState();
+      renderAdminDashboard();
+      showAlert(msgEl, `Receiver email updated to ${em}. Copy fresh quiz links so students use the new address.`, "success");
+    };
+
+    document.getElementById("aChangePassBtn").onclick = async () => {
+      const msgEl = document.getElementById("aPassMsg");
+      const p1 = document.getElementById("aNewPass1").value.trim();
+      const p2 = document.getElementById("aNewPass2").value.trim();
+      if (p1.length < 8) return showAlert(msgEl, "Password must be at least 8 characters.");
+      if (p1 !== p2) return showAlert(msgEl, "Passwords do not match.");
+      state.adminPassHash = await sha256Hex(p1);
+      saveState();
+      const verified = await verifyAdminPassword(p1);
+      document.getElementById("aNewPass1").value = "";
+      document.getElementById("aNewPass2").value = "";
+      if (!verified) {
+        return showAlert(msgEl, "The password could not be verified. Please try again.", "error");
+      }
+      showAlert(
+        msgEl,
+        "Admin password updated for this browser. If your browser keeps auto-filling the old password, delete the saved password for this site or type the new one manually.",
+        "success"
+      );
+    };
+
+    document.getElementById("exportJsonBtn").onclick = () => {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "gbat_portal_backup.json";
+      a.click();
+    };
+
+    document.getElementById("clearSubsBtn").onclick = () => {
+      if (!confirm("Clear all locally saved student submissions?")) return;
+      state.submissions = [];
+      saveState();
+      renderAdminDashboard();
+    };
+
+    initSharedLink();
+
+    window.addEventListener("load", () => {
+      setTimeout(() => {
+        const adminPass = document.getElementById("adminPassInput");
+        if (currentScreenId === "loginScreen") adminPass.value = "";
+      }, 500);
+    });
+  </script>
+</body>
+</html>
