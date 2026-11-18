@@ -1,6 +1,5 @@
 "use strict";
 
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const compression = require("compression");
@@ -24,21 +23,10 @@ app.disable("x-powered-by");
 app.set("trust proxy", config.trustProxy);
 
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
-const ASSET_FILES = ["app.js", "styles.css", "favicon.svg"];
 
-// The HTML is never cached; the asset query string is a content hash so a new
-// deploy always fetches fresh CSS/JS while repeat visits reuse immutable files.
-const ASSET_VERSION = (() => {
-  const hash = crypto.createHash("sha256");
-  for (const file of ASSET_FILES) {
-    hash.update(file);
-    hash.update(fs.readFileSync(path.join(PUBLIC_DIR, file)));
-  }
-  return hash.digest("hex").slice(0, 12);
-})();
-const INDEX_HTML = fs
-  .readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8")
-  .replace(/__ASSET_VERSION__/g, ASSET_VERSION);
+// index.html is never cached. Assets carry a manual ?v= token in that HTML so
+// browsers can cache them immutably and a token bump busts the cache on deploy.
+const INDEX_HTML = fs.readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8");
 
 app.use(compression({ threshold: 1024 }));
 
@@ -127,9 +115,7 @@ app.use(express.static(PUBLIC_DIR, {
   maxAge: 0,
   setHeaders(res, filePath) {
     const version = res.req && res.req.query ? res.req.query.v : null;
-    const isVersioned = typeof version === "string"
-      && /^[a-f0-9]{12}$/.test(version)
-      && version === ASSET_VERSION;
+    const isVersioned = typeof version === "string" && /^[\w-]{1,32}$/.test(version);
     if (isVersioned) {
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     } else if (path.extname(filePath) === ".html") {
