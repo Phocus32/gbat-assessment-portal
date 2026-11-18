@@ -162,7 +162,7 @@ app.use((err, req, res, next) => {
     const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
     return res.status(status).json({
       error: err.code === "LIMIT_FILE_SIZE"
-        ? "The uploaded file is too large. Use a file under 8 MB."
+        ? "The uploaded file is too large. Check the upload limit for this form."
         : "Could not read that upload."
     });
   }

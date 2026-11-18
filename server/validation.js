@@ -78,6 +78,10 @@ const questionCreateSchema = z.object({
   solution: z.string().trim().min(5, "Worked solution is too short.").max(8000, "Worked solution is too long.")
 });
 
+const questionImportSchema = z.object({
+  subjectId: z.coerce.number().int().positive().optional()
+});
+
 const quizCreateSchema = z.object({
   title: z.string().trim().min(3, "Quiz title must be at least 3 characters.").max(160, "Quiz title is too long."),
   classId: z.coerce.number().int().positive("Select a class."),
@@ -160,6 +164,7 @@ module.exports = {
   userCreateSchema,
   userUpdateSchema,
   questionCreateSchema,
+  questionImportSchema,
   quizCreateSchema,
   quizUpdateSchema,
   adminQuizUpdateSchema,

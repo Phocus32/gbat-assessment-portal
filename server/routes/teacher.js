@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const multer = require("multer");
 const {
   listWhere,
   listWhereIn,
@@ -19,6 +20,11 @@ const { getSettings } = require("../settings");
 const { subjectIdsOf, assertSubjectsAllowed, subjectMap } = require("../subjects");
 const { buildStudentTemplate } = require("../excel");
 const {
+  QuestionImportError,
+  buildQuestionTemplate,
+  importQuestionsFromBuffer
+} = require("../question-import");
+const {
   asyncHandler,
   parseOptions,
   csvCell,
@@ -28,6 +34,7 @@ const {
 const {
   idSchema,
   questionCreateSchema,
+  questionImportSchema,
   quizCreateSchema,
   quizUpdateSchema,
   announcementCreateSchema,
@@ -35,6 +42,11 @@ const {
 } = require("../validation");
 
 const router = express.Router();
+
+const uploadQuestions = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 }
+});
 
 function mapQuestion(row) {
   return {
@@ -347,6 +359,36 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     hardestQuestion: hardest,
     settings
   });
+}));
+
+router.get([
+  "/questions/template.csv",
+  "/questions/template.xlsx",
+  "/questions/template.json",
+  "/questions/template.txt",
+  "/questions/template.md"
+], asyncHandler(async (req, res) => {
+  const format = req.path.split(".").pop().toLowerCase();
+  const template = await buildQuestionTemplate(format);
+  res.setHeader("Content-Type", template.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${template.filename}"`);
+  return res.send(template.buffer);
+}));
+
+router.post("/questions/import", uploadQuestions.single("file"), asyncHandler(async (req, res) => {
+  if (!req.file) throw new QuestionImportError("Choose a question file to upload.");
+
+  const fallback = req.body && req.body.subjectId ? req.body.subjectId : undefined;
+  const input = questionImportSchema.parse({ subjectId: fallback });
+  if (input.subjectId && !(await assertSubjectsAllowed([input.subjectId], req.user))) {
+    return res.status(403).json({ error: "That subject is not assigned to your account." });
+  }
+
+  const result = await importQuestionsFromBuffer(req.file.buffer, req.file.originalname, {
+    actor: req.user,
+    defaultSubjectId: input.subjectId
+  });
+  return res.json(result);
 }));
 
 router.post("/questions", asyncHandler(async (req, res) => {

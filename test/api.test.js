@@ -424,6 +424,239 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(otherTeacherQuiz.status, 400);
   });
 
+  await t.test("teacher downloads question import templates in every supported format", async () => {
+    const csv = await teacherAgent.get("/api/teacher/questions/template.csv");
+    assert.equal(csv.status, 200);
+    assert.match(csv.headers["content-type"], /text\/csv/);
+    assert.match(csv.text, /question,optionA,optionB,optionC,optionD,answer,solution,subject,diagram/);
+
+    const xlsx = await teacherAgent.get("/api/teacher/questions/template.xlsx");
+    assert.equal(xlsx.status, 200);
+    assert.match(xlsx.headers["content-type"], /spreadsheetml/);
+    assert.match(xlsx.headers["content-disposition"], /gbat-question-import-template\.xlsx/);
+
+    const json = await teacherAgent.get("/api/teacher/questions/template.json");
+    assert.equal(json.status, 200);
+    assert.ok(JSON.parse(json.text).questions.length > 0);
+
+    for (const extension of ["txt", "md"]) {
+      const text = await teacherAgent.get(`/api/teacher/questions/template.${extension}`);
+      assert.equal(text.status, 200);
+      assert.match(text.text, /Question: What is 6 times 7\?/);
+      assert.match(text.text, /Answer: B/);
+    }
+  });
+
+  await t.test("teacher bulk imports CSV questions with strict answer and solution validation", async () => {
+    const csvRows = rows => rows
+      .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const headers = ["question", "optionA", "optionB", "optionC", "optionD", "answer", "solution", "subject", "diagram"];
+    const csv = csvRows([
+      headers,
+      ["What is 9 + 4?", "11", "13", "14", "15", "B", "Add 9 and 4 to get 13, so option B is the correct answer here.", "", ""],
+      ["Which shape has three sides?", "Square", "Circle", "Triangle", "Rectangle", "Triangle", "A triangle has exactly three sides, so the third option is the correct choice.", "", ""],
+      ["What is 7 + 5?", "10", "12", "14", "9", "B", "Adding 7 and 5 gives 12, which matches the second option exactly.", "", ""],
+      ["What is 9 + 4?", "11", "13", "14", "15", "B", "Add 9 and 4 to get 13, so option B is the correct answer here.", "", ""],
+      ["What is 10 - 6?", "3", "4", "5", "6", "", "Subtract 6 from 10 to get 4, so option B is the correct answer here.", "", ""],
+      ["What is 3 squared?", "6", "9", "12", "15", "B", "", "", ""]
+    ]);
+
+    const response = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(csv, "utf8"), {
+        filename: "questions.csv",
+        contentType: "text/csv"
+      });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.summary, { total: 6, created: 2, skipped: 2, failed: 2 });
+    assert.match(response.body.failed[0].reason, /correct answer/i);
+    assert.match(response.body.failed[1].reason, /worked solution/i);
+
+    const mathsQuestions = await listWhere("questions", "subject_id", mathsSubjectId);
+    assert.ok(mathsQuestions.some(item => item.question_text === "What is 9 + 4?" && item.correct_index === 1));
+    assert.ok(mathsQuestions.some(item => item.question_text === "Which shape has three sides?" && item.correct_index === 2));
+
+    const missing = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId));
+    assert.equal(missing.status, 400);
+  });
+
+  await t.test("bulk importer enforces subject scoping for teacher uploads", async () => {
+    const csvRows = rows => rows
+      .map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const headers = ["question", "optionA", "optionB", "optionC", "optionD", "answer", "solution", "subject", "diagram"];
+    const scienceCsv = csvRows([
+      headers,
+      [
+        "What is photosynthesis?",
+        "Respiration", "Photosynthesis", "Digestion", "Condensation", "B",
+        "Plants use sunlight to turn carbon dioxide and water into glucose, so option B is correct.",
+        "Science", ""
+      ]
+    ]);
+    const plainCsv = csvRows([
+      headers,
+      [
+        "What is 2 + 8?",
+        "8", "10", "12", "14", "B",
+        "Adding 2 and 8 gives 10, which is the second option in this question.",
+        "", ""
+      ]
+    ]);
+
+    const unassignedRow = await teacher2Agent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(scienceCsv, "utf8"), {
+        filename: "science.csv",
+        contentType: "text/csv"
+      });
+    assert.equal(unassignedRow.status, 200);
+    assert.equal(unassignedRow.body.summary.created, 0);
+    assert.equal(unassignedRow.body.summary.failed, 1);
+    assert.match(unassignedRow.body.failed[0].reason, /not assigned/i);
+
+    const unassignedDefault = await teacher2Agent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(scienceSubjectId))
+      .attach("file", Buffer.from(plainCsv, "utf8"), {
+        filename: "questions.csv",
+        contentType: "text/csv"
+      });
+    assert.equal(unassignedDefault.status, 403);
+  });
+
+  await t.test("teacher bulk imports JSON and structured Markdown questions", async () => {
+    const jsonPayload = {
+      questions: [
+        {
+          question: "What is 5 + 9?",
+          options: ["12", "13", "14", "15"],
+          correctIndex: 1,
+          solution: "Add 5 and 9 to get 14, so option B is the correct answer here."
+        },
+        {
+          question: "Which planet is known as the Red Planet?",
+          options: ["Venus", "Mars", "Jupiter", "Saturn"],
+          answer: "Mars",
+          solution: "Mars appears red because iron oxide covers its surface, so the second option is correct."
+        },
+        {
+          question: "Which number is prime?",
+          options: ["4", "6", "8", "9"],
+          answer: "A",
+          solution: ""
+        }
+      ]
+    };
+
+    const jsonResponse = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(JSON.stringify(jsonPayload), "utf8"), {
+        filename: "questions.json",
+        contentType: "application/json"
+      });
+    assert.equal(jsonResponse.status, 200);
+    assert.deepEqual(jsonResponse.body.summary, { total: 3, created: 2, skipped: 0, failed: 1 });
+    assert.match(jsonResponse.body.failed[0].reason, /worked solution/i);
+
+    const markdown = [
+      "## Question 1",
+      "Question: Which gas do plants absorb during photosynthesis?",
+      "Subject: Mathematics",
+      "A. Oxygen",
+      "B. Nitrogen",
+      "C. Carbon dioxide",
+      "D. Hydrogen",
+      "Answer: C",
+      "Solution: Plants take in carbon dioxide from the air and use it with sunlight to make glucose during photosynthesis.",
+      "",
+      "## Question 2",
+      "Question: What is 8 divided by 2?",
+      "Subject: Mathematics",
+      "A. 2",
+      "B. 4",
+      "C. 6",
+      "D. 8",
+      "Answer: B",
+      "Solution:"
+    ].join("\n");
+
+    const mdResponse = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(markdown, "utf8"), {
+        filename: "questions.md",
+        contentType: "text/markdown"
+      });
+    assert.equal(mdResponse.status, 200);
+    assert.deepEqual(mdResponse.body.summary, { total: 2, created: 1, skipped: 0, failed: 1 });
+    assert.equal(mdResponse.body.created[0].subject, "Mathematics");
+
+    const txt = [
+      "Question: Which instrument measures temperature?",
+      "Subject: Science",
+      "A. Barometer",
+      "B. Thermometer",
+      "C. Seismograph",
+      "D. Microscope",
+      "Answer: Thermometer",
+      "Solution: A thermometer measures temperature, so the second option is the correct choice here."
+    ].join("\n");
+
+    const txtResponse = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(txt, "utf8"), {
+        filename: "questions.txt",
+        contentType: "text/plain"
+      });
+    assert.equal(txtResponse.status, 200);
+    assert.equal(txtResponse.body.summary.created, 1);
+    assert.equal(txtResponse.body.created[0].subject, "Science");
+  });
+
+  await t.test("teacher bulk imports XLSX question workbooks", async () => {
+    const ExcelJS = require("exceljs");
+    const { TEMPLATE_HEADERS } = require("../server/question-import");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Questions");
+    sheet.addRow(TEMPLATE_HEADERS);
+    sheet.addRow([
+      "What is 6 times 4?", "20", "24", "28", "30", "B",
+      "Multiply 6 by 4 to get 24, so option B is the correct answer here.", "", ""
+    ]);
+    sheet.addRow([
+      "What is 12 divided by 3?", "2", "3", "4", "6", "C",
+      "", "", ""
+    ]);
+
+    const response = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(await workbook.xlsx.writeBuffer()), {
+        filename: "questions.xlsx",
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.summary, { total: 2, created: 1, skipped: 0, failed: 1 });
+    assert.equal(response.body.created[0].question, "What is 6 times 4?");
+  });
+
   await t.test("student sees the quiz without answer keys", async () => {
     const dashboard = await studentAgent.get("/api/student/dashboard");
     assert.equal(dashboard.status, 200);

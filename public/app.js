@@ -977,6 +977,50 @@ function renderTeacherQuestions() {
   return `
     ${pageHead("Question bank", "Questions", "Every quiz receives a copy of its questions, so the bank stays stable after publishing.")}
     <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Bulk upload questions</h2>
+        <span class="pill">CSV · XLSX · JSON · TXT/MD</span>
+      </div>
+      <div class="panel-body">
+        <form class="form" data-form="import-questions">
+          <div class="form-row">
+            <div class="field">
+              <label for="question-import-subject">Default subject</label>
+              <select id="question-import-subject" name="subjectId" required>
+                ${availableSubjects().map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
+              </select>
+              <p class="form-note">Rows with a subject column must use one of your assigned subject names or numeric IDs. Blank subjects use this default.</p>
+            </div>
+            <div class="field">
+              <label for="question-import-file">Question file</label>
+              <input id="question-import-file" name="file" type="file" accept=".csv,.tsv,.xlsx,.json,.txt,.md" required>
+              <p class="form-note">Up to 500 questions and 5 MB per upload.</p>
+            </div>
+          </div>
+          <details class="notice">
+            <summary class="field-label">Format guide</summary>
+            <ul class="option-lines mt-06">
+              <li class="option-line"><span><strong>CSV/XLSX:</strong> columns are question, optionA, optionB, optionC, optionD, answer, solution, subject (optional), diagram (optional).</span></li>
+              <li class="option-line"><span><strong>JSON:</strong> an array of objects, or <code>{ "questions": [...] }</code>, with question, options, answer and solution.</span></li>
+              <li class="option-line"><span><strong>TXT/MD:</strong> repeated blocks starting with <code>Question:</code>, followed by A/B/C/D lines, <code>Answer:</code> and <code>Solution:</code>.</span></li>
+              <li class="option-line"><span>Answer may be A-D, 1-4, or the exact correct option text.</span></li>
+              <li class="option-line"><span>Every question needs four different options and a worked solution of at least 8 words. Missing or weak explanations are rejected.</span></li>
+              <li class="option-line"><span>Questions already in the same subject are skipped. Subjects are never created by an upload.</span></li>
+            </ul>
+          </details>
+          <p class="form-note">Templates:
+            <a href="/api/teacher/questions/template.csv">CSV</a> ·
+            <a href="/api/teacher/questions/template.xlsx">XLSX</a> ·
+            <a href="/api/teacher/questions/template.json">JSON</a> ·
+            <a href="/api/teacher/questions/template.txt">TXT</a> ·
+            <a href="/api/teacher/questions/template.md">MD</a>
+          </p>
+          <p class="form-error" data-form-error role="alert"></p>
+          <div><button type="submit" class="btn btn-primary">Upload questions</button></div>
+        </form>
+      </div>
+    </section>
+    <section class="panel mt-1">
       <div class="panel-head"><h2 class="panel-title">Add a question</h2></div>
       <div class="panel-body">
         <form class="form" data-form="add-question">
@@ -1886,6 +1930,61 @@ function openImportResult(result) {
     </div>`);
 }
 
+function openQuestionImportResult(result) {
+  const summary = result.summary || {
+    total: (result.created || []).length + (result.skipped || []).length + (result.failed || []).length,
+    created: (result.created || []).length,
+    skipped: (result.skipped || []).length,
+    failed: (result.failed || []).length
+  };
+  const created = result.created || [];
+  const shownCreated = created.slice(0, 12);
+  const issues = [
+    ...(result.skipped || []).map(item => `Row ${item.rowNumber}: ${item.question} - ${item.reason}`),
+    ...(result.failed || []).map(item => `Row ${item.rowNumber}: ${item.question || "Unknown"} - ${item.reason}`)
+  ];
+  const shownIssues = issues.slice(0, 20);
+
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Question import complete</h2>
+        <p>${esc(summary.created)} created, ${esc(summary.skipped)} skipped, ${esc(summary.failed)} failed from ${esc(summary.total)} item(s).</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Close</button>
+    </div>
+    <div class="modal-body">
+      ${shownCreated.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Row</th><th>Question</th><th>Subject</th></tr></thead>
+            <tbody>
+              ${shownCreated.map(item => `
+                <tr>
+                  <td>${esc(item.rowNumber)}</td>
+                  <td><strong>${esc(item.question)}</strong></td>
+                  <td>${esc(item.subject)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${created.length > shownCreated.length ? `<p class="form-note mt-06">Showing the first ${shownCreated.length} of ${created.length} imported questions.</p>` : ""}` : `
+        <div class="notice">No new questions were imported.</div>`}
+      ${shownIssues.length ? `
+        <div class="field mt-09">
+          <span class="field-label">Rows that need attention</span>
+          <ul class="option-lines">
+            ${shownIssues.map(item => `<li class="option-line"><span>${esc(item)}</span></li>`).join("")}
+          </ul>
+        </div>
+        ${issues.length > shownIssues.length ? `<p class="form-note mt-06">Showing the first ${shownIssues.length} of ${issues.length} issues.</p>` : ""}` : ""}
+      <p class="form-note mt-09">Rejected rows are never saved. Fix the file and upload it again if you need to add those questions.</p>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" data-action="close-modal">Done</button>
+    </div>`);
+}
+
 function downloadImportCredentials() {
   if (!state.importCredentials.length) return;
   const rows = [
@@ -2659,6 +2758,22 @@ async function handleSubmit(form) {
       });
       await refresh();
       toast("Settings saved.", "success");
+    });
+    return;
+  }
+
+  if (formType === "import-questions") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const file = data.get("file");
+      if (!(file instanceof File) || !file.size) throw new Error("Choose a question file to upload.");
+      const upload = new FormData();
+      upload.append("file", file, file.name);
+      upload.append("subjectId", String(data.get("subjectId") || ""));
+      const result = await api("/teacher/questions/import", { method: "POST", formData: upload });
+      form.reset();
+      await refresh();
+      openQuestionImportResult(result);
     });
     return;
   }
