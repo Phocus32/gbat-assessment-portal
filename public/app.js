@@ -53,6 +53,8 @@ const state = {
   importCredentials: []
 };
 
+let confettiTimer = null;
+
 function esc(value) {
   return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, char => ({
     "&": "&amp;",
@@ -197,6 +199,153 @@ function toast(message, type = "info") {
   setTimeout(() => node.remove(), 4500);
 }
 
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function animateEntrance(root) {
+  if (!root || prefersReducedMotion()) return;
+  [...root.children].forEach((node, index) => {
+    node.classList.remove("view-enter");
+    void node.offsetWidth;
+    node.style.setProperty("--enter-delay", `${Math.min(index * 70, 280)}ms`);
+    node.classList.add("view-enter");
+    const clear = () => {
+      node.classList.remove("view-enter");
+      node.style.removeProperty("--enter-delay");
+    };
+    node.addEventListener("animationend", clear, { once: true });
+    setTimeout(clear, 900);
+  });
+}
+
+function animateStats(root) {
+  if (!root || prefersReducedMotion()) return;
+  root.querySelectorAll("[data-stat-value]").forEach(element => {
+    const original = element.textContent.trim();
+    const match = original.match(/^([^\d-]*)(-?\d+(?:\.\d+)?)(.*)$/);
+    if (!match) return;
+
+    const [, prefix, numberText, suffix] = match;
+    const target = Number(numberText);
+    if (!Number.isFinite(target)) return;
+
+    const decimals = (numberText.split(".")[1] || "").length;
+    const started = Date.now();
+    const duration = 650;
+
+    element.textContent = `${prefix}${(0).toFixed(decimals)}${suffix}`;
+    const timer = setInterval(() => {
+      if (!element.isConnected) {
+        clearInterval(timer);
+        return;
+      }
+      const progress = Math.min(1, (Date.now() - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      element.textContent = `${prefix}${(target * eased).toFixed(decimals)}${suffix}`;
+      if (progress >= 1) {
+        element.textContent = original;
+        clearInterval(timer);
+      }
+    }, 30);
+  });
+}
+
+function addRipple(event) {
+  if (prefersReducedMotion()) return;
+  const button = event.target.closest("button.btn, button.nav-btn, button.option-btn, button.palette-btn");
+  if (!button || button.disabled) return;
+
+  const rect = button.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height) * 2;
+  const ripple = document.createElement("span");
+  ripple.className = "ripple";
+  ripple.style.width = `${size}px`;
+  ripple.style.height = `${size}px`;
+  ripple.style.left = `${(event.clientX || rect.left + rect.width / 2) - rect.left - size / 2}px`;
+  ripple.style.top = `${(event.clientY || rect.top + rect.height / 2) - rect.top - size / 2}px`;
+  button.appendChild(ripple);
+  ripple.addEventListener("animationend", () => ripple.remove(), { once: true });
+}
+
+function celebrate() {
+  if (prefersReducedMotion()) return;
+
+  let layer = document.getElementById("confetti-layer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "confetti-layer";
+    layer.setAttribute("aria-hidden", "true");
+    document.body.appendChild(layer);
+  }
+  layer.replaceChildren();
+
+  const colors = ["#0f5c45", "#e7b34a", "#2e6fd8", "#7448c7", "#d2523f"];
+  for (let index = 0; index < 36; index += 1) {
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.background = colors[index % colors.length];
+    piece.style.setProperty("--delay", `${Math.random() * 0.35}s`);
+    piece.style.setProperty("--duration", `${1.7 + Math.random() * 0.9}s`);
+    piece.style.setProperty("--drift", `${Math.random() * 160 - 80}px`);
+    piece.style.setProperty("--spin", `${Math.random() * 720 - 360}deg`);
+    layer.appendChild(piece);
+  }
+
+  clearTimeout(confettiTimer);
+  confettiTimer = setTimeout(() => {
+    layer.remove();
+    confettiTimer = null;
+  }, 3200);
+}
+
+function animateScoreRings(root) {
+  if (!root) return;
+  root.querySelectorAll(".score-ring[data-score]").forEach(ring => {
+    const target = Number(ring.dataset.score) || 0;
+    if (prefersReducedMotion()) {
+      ring.style.setProperty("--score", String(target));
+      return;
+    }
+
+    ring.style.setProperty("--score", "0");
+    const started = Date.now();
+    const duration = 900;
+    const timer = setInterval(() => {
+      if (!ring.isConnected) {
+        clearInterval(timer);
+        return;
+      }
+      const progress = Math.min(1, (Date.now() - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      ring.style.setProperty("--score", String(target * eased));
+      if (progress >= 1) {
+        ring.style.setProperty("--score", String(target));
+        clearInterval(timer);
+      }
+    }, 30);
+  });
+}
+
+function animateAnswerFeedback(entry) {
+  if (!entry || prefersReducedMotion()) return;
+
+  const chosen = appEl.querySelector(`.option-btn[data-position="${entry.position}"][data-index="${entry.chosenIndex}"]`);
+  if (chosen) chosen.classList.add(entry.isCorrect ? "pop" : "shake");
+
+  if (!entry.isCorrect && entry.correctIndex !== undefined) {
+    const correct = appEl.querySelector(`.option-btn[data-position="${entry.position}"][data-index="${entry.correctIndex}"]`);
+    if (correct) correct.classList.add("pop");
+  }
+
+  const card = appEl.querySelector(".question-card");
+  if (card) card.classList.add(entry.isCorrect ? "answer-correct" : "answer-wrong");
+
+  const feedback = appEl.querySelector(".feedback");
+  if (feedback) feedback.classList.add("just-shown");
+}
+
 function closeModal() {
   if (modalEl.open) modalEl.close();
 }
@@ -206,6 +355,8 @@ function openModal(html) {
   labelTableCells(modalContent);
   applyFormVisibility();
   if (!modalEl.open) modalEl.showModal();
+  animateEntrance(modalContent);
+  animateScoreRings(modalContent);
 }
 
 async function api(path, options = {}) {
@@ -494,6 +645,12 @@ function renderShell() {
     </div>`;
   labelTableCells(appEl);
   applyFormVisibility();
+
+  const page = appEl.querySelector(".page");
+  if (page) {
+    animateEntrance(page);
+    if (user.role === "student") animateStats(page);
+  }
 }
 
 function renderView() {
@@ -502,11 +659,12 @@ function renderView() {
   return renderStudentView();
 }
 
-function statCard(label, value, hint = "") {
+function statCard(label, value, hint = "", accent = "") {
+  const countUp = /^\d+(?:\.\d+)?%?$/.test(String(value).trim());
   return `
-    <article class="stat-card">
+    <article class="stat-card ${accent ? `accent-${esc(accent)}` : ""}">
       <span class="stat-label">${esc(label)}</span>
-      <strong class="stat-value">${esc(value)}</strong>
+      <strong class="stat-value" ${countUp ? "data-stat-value" : ""}>${esc(value)}</strong>
       ${hint ? `<span class="stat-hint">${esc(hint)}</span>` : ""}
     </article>`;
 }
@@ -1421,17 +1579,44 @@ function renderStudentView() {
   return renderStudentDashboard();
 }
 
+function studentHero() {
+  const d = state.data;
+  const firstName = String(state.user.name || "student").trim().split(/\s+/)[0] || "student";
+  const open = Number(d.stats.available) || 0;
+  const message = open
+    ? `You have ${open} open ${open === 1 ? "quiz" : "quizzes"} waiting. Pick one and show what you know!`
+    : "No quizzes are open right now. Review your results while your teacher prepares the next one.";
+
+  return `
+    <section class="student-hero">
+      <div class="hero-copy">
+        <span class="hero-eyebrow">Your learning space</span>
+        <h1 class="hero-title">Hi ${esc(firstName)}, let's make today count!</h1>
+        <p class="hero-subtitle">${esc(message)}</p>
+        <div class="hero-actions">
+          <button type="button" class="btn btn-primary" data-action="scroll-quizzes">Find a quiz</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <span class="hero-orb one"></span>
+        <span class="hero-orb two"></span>
+        <span class="hero-orb three"></span>
+        <span class="hero-note">Keep going! ✦</span>
+      </div>
+    </section>`;
+}
+
 function renderStudentDashboard() {
   const d = state.data;
   return `
-    ${pageHead("Student", `Hello, ${state.user.name}`, d.class ? `${d.class.name} · Your private assessment dashboard.` : "Your private assessment dashboard.",
-      `<button type="button" class="btn" data-action="nav" data-view="results">My results</button>`)}
+    ${studentHero()}
     <div class="stat-grid">
-      ${statCard("Class", d.class ? d.class.name : "Unassigned")}
-      ${statCard("Open quizzes", d.stats.available)}
-      ${statCard("Quizzes taken", d.stats.quizzesTaken)}
-      ${statCard("Average", `${d.stats.average}%`, "Best attempt per quiz")}
-      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`)}
+      ${statCard("Class", d.class ? d.class.name : "Unassigned", "", "blue")}
+      ${statCard("Open quizzes", d.stats.available, "Ready for you", "green")}
+      ${statCard("Quizzes taken", d.stats.quizzesTaken, "Every try counts", "purple")}
+      ${statCard("Average", `${d.stats.average}%`, "Best attempt per quiz", "gold")}
+      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`, "coral")}
     </div>
     <div class="grid-2">
       <section class="panel">
@@ -1460,7 +1645,7 @@ function renderStudentDashboard() {
         </div>
       </section>
     </div>
-    <div class="page-head mt-16">
+    <div class="page-head mt-16" id="student-quizzes">
       <div>
         <span class="eyebrow">Your class</span>
         <h2 class="page-title page-title-sm">Quizzes</h2>
@@ -1468,10 +1653,10 @@ function renderStudentDashboard() {
     </div>
     ${d.quizzes.length ? `
       <div class="quiz-grid">
-        ${d.quizzes.map(quiz => `
-          <article class="quiz-card">
+        ${d.quizzes.map((quiz, index) => `
+          <article class="quiz-card tone-${index % 5}">
             <div class="quiz-card-head">
-              <h3>${esc(quiz.title)}</h3>
+              <h3><span class="quiz-icon" aria-hidden="true">${esc(subjectName(quiz.subjectId).slice(0, 1).toUpperCase())}</span>${esc(quiz.title)}</h3>
               ${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}
             </div>
             <div class="quiz-meta">
@@ -1481,7 +1666,9 @@ function renderStudentDashboard() {
             </div>
             ${quiz.bestPct === null
               ? `<p class="muted small">No submitted attempt yet.</p>`
-              : `<p class="quiz-score"><span>Best score</span><strong>${esc(quiz.bestPct)}%</strong><span class="muted">last ${esc(fmtDate(quiz.lastSubmittedAt))}</span></p>`}
+              : `<p class="quiz-score"><span>Best score</span><strong>${esc(quiz.bestPct)}%</strong><span class="muted">last ${esc(fmtDate(quiz.lastSubmittedAt))}</span></p>
+                 <div class="quiz-score-bar" aria-hidden="true"><span style="--bar-width: ${Number(quiz.bestPct)}%"></span></div>`}
+            ${quiz.bestPct !== null ? `<p class="quiz-hint">${Number(quiz.bestPct) >= Number(d.settings.passMark) ? "Nice work — you passed this one!" : "Try again and beat your best score."}</p>` : ""}
             <div class="quiz-actions">
               ${quiz.isOpen ? `
                 <button type="button" class="btn btn-primary btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Practice">Practice</button>
@@ -1494,13 +1681,12 @@ function renderStudentDashboard() {
 function renderStudentResults() {
   const d = state.data;
   return `
-    ${pageHead("Progress", "My results", d.settings.showSolutions
-      ? "Scores are stored per submission. Open any result to review the worked solutions."
-      : "Scores are stored per submission. Worked solutions are hidden by your administrator.")}
+    ${pageHead("Progress", "Your results", "Every attempt is a step forward. Open a result to see how you did.",
+      `<button type="button" class="btn" data-action="nav" data-view="dashboard">Back to quizzes</button>`)}
     <div class="stat-grid">
-      ${statCard("Quizzes taken", d.stats.quizzesTaken)}
-      ${statCard("Average", `${d.stats.average}%`)}
-      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`)}
+      ${statCard("Quizzes taken", d.stats.quizzesTaken, "", "purple")}
+      ${statCard("Average", `${d.stats.average}%`, "", "gold")}
+      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`, "coral")}
     </div>
     <section class="panel">
       <div class="panel-head"><h2 class="panel-title">Submission history</h2></div>
@@ -1616,10 +1802,15 @@ function renderAttempt() {
     }
     if (answer) classes += " locked";
 
+    const check = practice && answer && (index === answer.correctIndex || answer.chosenIndex === index)
+      ? `<span class="option-check" aria-hidden="true">${index === answer.correctIndex ? "✓" : "✕"}</span>`
+      : "";
+
     return `
       <button type="button" class="${classes}" data-action="answer" data-position="${question.position}" data-index="${index}" ${answer ? "disabled" : ""}>
         <span class="option-letter">${letter(index)}</span>
         <span>${esc(option)}</span>
+        ${check}
       </button>`;
   }).join("");
 
@@ -1627,7 +1818,7 @@ function renderAttempt() {
   if (practice && answer) {
     feedback = `
       <div class="feedback ${answer.isCorrect ? "ok" : "bad"}">
-        <strong>${answer.isCorrect ? "Correct" : "Not quite"}</strong>
+        <strong><span class="feedback-mark" aria-hidden="true">${answer.isCorrect ? "✓" : "✕"}</span>${answer.isCorrect ? "Correct" : "Not quite"}</strong>
         <div>Correct answer: ${letter(answer.correctIndex)}. ${esc(question.options[answer.correctIndex] || "")}</div>
         <div class="solution"><strong>Worked solution</strong><br>${esc(answer.solution || "")}</div>
       </div>`;
@@ -1705,6 +1896,9 @@ function renderAttempt() {
     </div>`;
 
   updateTimerDisplay();
+
+  const layout = appEl.querySelector(".runner-layout");
+  if (layout) animateEntrance(layout);
 }
 
 async function startQuiz(quizId, mode) {
@@ -1728,6 +1922,7 @@ async function answerQuestion(position, chosenIndex) {
     const entry = { position, chosenIndex, ...(result.feedback || {}) };
     attempt.answers.push(entry);
     renderAttempt();
+    animateAnswerFeedback(entry);
   } catch (error) {
     if (error.status === 410) {
       toast(error.message, "warn");
@@ -1771,6 +1966,8 @@ async function submitAttempt(auto) {
     await loadData();
     render();
     await openSubmission(result.submissionId);
+    const passMark = Number((state.data && state.data.settings && state.data.settings.passMark) || 0);
+    if (Number(result.pct) >= passMark) celebrate();
   } catch (error) {
     state.submitting = false;
     if (error.status === 410) {
@@ -1835,6 +2032,11 @@ function submissionHtml(submission) {
       </article>`;
   }).join("");
 
+  const pct = Number(submission.pct) || 0;
+  const passMark = Number((state.data && state.data.settings && state.data.settings.passMark) || 0);
+  const passed = pct >= passMark;
+  const cheer = passed ? "Great work — you passed!" : "Keep practising — every attempt helps.";
+
   return `
     <div class="modal-head">
       <div>
@@ -1845,9 +2047,15 @@ function submissionHtml(submission) {
     </div>
     <div class="modal-body">
       <div class="result-banner">
-        <div class="result-score">
-          <strong>${esc(submission.pct)}%</strong>
-          <span class="muted">${esc(submission.score)} of ${esc(submission.total)} correct</span>
+        <div class="score-ring ${passed ? "pass" : "review"}" data-score="${pct}" role="img" aria-label="${pct}% score">
+          <span>${esc(submission.pct)}%</span>
+        </div>
+        <div class="result-banner-copy">
+          <div class="result-score">
+            <strong>${esc(submission.pct)}%</strong>
+            <span class="muted">${esc(submission.score)} of ${esc(submission.total)} correct</span>
+          </div>
+          <p class="result-cheer">${cheer}</p>
         </div>
         <div class="toolbar">${badge(submission.mode, submission.mode === "Exam" ? "warn" : "brand")}</div>
       </div>
@@ -2275,6 +2483,16 @@ async function runAction(button) {
     case "nav":
       navTo(button.dataset.view);
       return;
+    case "scroll-quizzes": {
+      const target = document.getElementById("student-quizzes");
+      if (target) {
+        target.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "start"
+        });
+      }
+      return;
+    }
     case "logout":
       await logout();
       return;
@@ -2836,6 +3054,7 @@ async function handleSubmit(form) {
 /* Events */
 
 document.addEventListener("click", async event => {
+  addRipple(event);
   const button = event.target.closest("[data-action]");
   if (!button) return;
   if (!appEl.contains(button) && !modalEl.contains(button)) return;
