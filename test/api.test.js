@@ -565,6 +565,27 @@ test("secured portal end-to-end API flow", async t => {
     assert.match(blocked.body.error, /Cannot delete/);
   });
 
+  await t.test("admin can rename a student without changing the username", async () => {
+    const created = await adminAgent
+      .post("/api/admin/users")
+      .set(CSRF)
+      .send({ name: "Rename Me", username: "rename.me", role: "student", classId });
+    assert.equal(created.status, 201);
+
+    const renamed = await adminAgent
+      .patch(`/api/admin/users/${created.body.user.id}`)
+      .set(CSRF)
+      .send({ name: "Renamed Student" });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.body.user.name, "Renamed Student");
+    assert.equal(renamed.body.user.username, "rename.me");
+
+    const removed = await adminAgent
+      .delete(`/api/admin/users/${created.body.user.id}`)
+      .set(CSRF);
+    assert.equal(removed.status, 200);
+  });
+
   await t.test("creating a quiz with shuffleQuestions=true stores the flag", async () => {
     const created = await teacherAgent
       .post("/api/teacher/quizzes")

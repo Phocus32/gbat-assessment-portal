@@ -592,6 +592,7 @@ function renderAdminUsers() {
                 if (user.role !== "admin") {
                   actions = `
                     <div class="row-actions">
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="open-rename-user" data-id="${user.id}">Edit name</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="reset-password" data-id="${user.id}">Reset password</button>
                       <button type="button" class="btn btn-sm ${user.active ? "btn-danger" : "btn-success"}" data-action="toggle-user" data-id="${user.id}">${user.active ? "Suspend" : "Activate"}</button>
                       ${user.role === "student" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-move-user" data-id="${user.id}">Move class</button>` : ""}
@@ -1744,6 +1745,33 @@ function openRenameClass(classId) {
     </div>`);
 }
 
+function openRenameUser(userId) {
+  const target = state.data.users.find(user => user.id === userId);
+  if (!target) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Edit name</h2>
+        <p>${esc(target.username)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="rename-user">
+        <input type="hidden" name="id" value="${target.id}">
+        <div class="field">
+          <label for="user-name">Full name</label>
+          <input id="user-name" name="name" type="text" maxlength="120" value="${esc(target.name)}" required>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save name</button>
+        </div>
+      </form>
+    </div>`);
+}
+
 function openMoveUser(userId) {
   const target = state.data.users.find(user => user.id === userId);
   if (!target) return;
@@ -1824,6 +1852,9 @@ async function runAction(button) {
     }
     case "open-rename-class":
       openRenameClass(id);
+      return;
+    case "open-rename-user":
+      openRenameUser(id);
       return;
     case "open-move-user":
       openMoveUser(id);
@@ -2111,6 +2142,20 @@ async function handleSubmit(form) {
       closeModal();
       await refresh();
       openTempPassword(result.user, result.temporaryPassword, "Account created");
+    });
+    return;
+  }
+
+  if (formType === "rename-user") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const id = Number(data.get("id"));
+      const name = String(data.get("name") || "").trim();
+      if (name.length < 2) throw new Error("Enter a name of at least 2 characters.");
+      await api(`/admin/users/${id}`, { method: "PATCH", body: { name } });
+      closeModal();
+      await refresh();
+      toast("Name updated.", "success");
     });
     return;
   }

@@ -53,6 +53,7 @@ const userCreateSchema = z.object({
 });
 
 const userUpdateSchema = z.object({
+  name: nameSchema.optional(),
   active: z.boolean().optional(),
   classId: z.coerce.number().int().positive().nullable().optional()
 });

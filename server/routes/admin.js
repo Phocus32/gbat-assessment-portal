@@ -243,6 +243,11 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
   const actions = [];
   let bumpToken = false;
 
+  if (input.name !== undefined && input.name !== target.name) {
+    patch.name = input.name;
+    actions.push(`Renamed ${target.name} to ${input.name}`);
+  }
+
   if (typeof input.active === "boolean") {
     patch.active = input.active;
     bumpToken = true;
