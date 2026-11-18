@@ -23,12 +23,19 @@ const {
   findUserByUsername,
   createUser: insertUser,
   getDocById,
-  setSetting,
+  updateDocById,
   close
 } = require("../server/fdb");
+const { ensureSettings } = require("../server/settings");
+const { createSubject } = require("../server/subjects");
 const { hashPassword } = require("../server/security");
 
 const CSRF = { "X-Requested-With": "XMLHttpRequest" };
+
+let generalSubjectId;
+let mathsSubjectId;
+let scienceSubjectId;
+let secondClassId;
 
 async function clearQuery(query) {
   const snapshot = await query.get();
@@ -52,6 +59,8 @@ async function resetDatabase() {
     "questions",
     "quizzes",
     "settings",
+    "subject_names",
+    "subjects",
     "submissions",
     "usernames",
     "users"
@@ -59,10 +68,13 @@ async function resetDatabase() {
   for (const name of collections) {
     await clearQuery(db.collection(name));
   }
-  await setSetting("default_quiz_minutes", "45");
+  await ensureSettings();
+  generalSubjectId = await createSubject("General");
+  mathsSubjectId = await createSubject("Mathematics");
+  scienceSubjectId = await createSubject("Science");
 }
 
-async function createUser({ name, username, password, role, classId = null, mustChange = 0 }) {
+async function createUser({ name, username, password, role, classId = null, mustChange = 0, subjectIds = [] }) {
   const passwordHash = await hashPassword(password);
   return insertUser({
     name,
@@ -70,6 +82,7 @@ async function createUser({ name, username, password, role, classId = null, must
     password_hash: passwordHash,
     role,
     class_id: classId,
+    subject_ids: subjectIds,
     must_change_password: Boolean(mustChange)
   });
 }
@@ -103,10 +116,13 @@ test("secured portal end-to-end API flow", async t => {
   let teacher2Agent;
   let studentAgent;
   let classId;
+  let teacher1Id;
+  let teacher2Id;
   let quizId;
   let practiceSubmissionId;
   let firstQuestionId;
   let secondQuestionId;
+  let scienceQuestionId;
   let student2Id;
   let student2TempPassword;
 
@@ -114,6 +130,18 @@ test("secured portal end-to-end API flow", async t => {
     const response = await request(app).get("/api/health");
     assert.equal(response.status, 200);
     assert.deepEqual(response.body, { ok: true });
+  });
+
+  await t.test("HTML stays fresh while versioned assets are immutable", async () => {
+    const page = await request(app).get("/");
+    assert.equal(page.status, 200);
+    assert.match(page.headers["cache-control"], /no-store/);
+    const match = page.text.match(/src="\/app\.js\?v=([a-f0-9]{12})"/);
+    assert.ok(match, "app.js should carry a generated asset version");
+
+    const asset = await request(app).get(`/app.js?v=${match[1]}`);
+    assert.equal(asset.status, 200);
+    assert.match(asset.headers["cache-control"], /immutable/);
   });
 
   await t.test("mutating requests require the CSRF header", async () => {
@@ -163,22 +191,42 @@ test("secured portal end-to-end API flow", async t => {
       .send({ name: "Basic 8A - Gold" });
     assert.equal(renamed.status, 200);
     assert.equal(renamed.body.class.name, "Basic 8A - Gold");
+
+    const second = await adminAgent
+      .post("/api/admin/classes")
+      .set(CSRF)
+      .send({ name: "Basic 8B" });
+    assert.equal(second.status, 201);
+    secondClassId = second.body.class.id;
   });
 
   await t.test("admin creates teacher and student accounts with temporary passwords", async () => {
     const teacher = await adminAgent
       .post("/api/admin/users")
       .set(CSRF)
-      .send({ name: "Teacher One", username: "teacher.one", role: "teacher" });
+      .send({
+        name: "Teacher One",
+        username: "teacher.one",
+        role: "teacher",
+        subjectIds: [mathsSubjectId, scienceSubjectId]
+      });
     assert.equal(teacher.status, 201);
     assert.equal(teacher.body.user.mustChangePassword, true);
+    teacher1Id = teacher.body.user.id;
+    assert.deepEqual(teacher.body.user.subjectIds, [mathsSubjectId, scienceSubjectId]);
     assert.ok(teacher.body.temporaryPassword.length >= 10);
 
     const teacher2 = await adminAgent
       .post("/api/admin/users")
       .set(CSRF)
-      .send({ name: "Teacher Two", username: "teacher.two", role: "teacher" });
+      .send({
+        name: "Teacher Two",
+        username: "teacher.two",
+        role: "teacher",
+        subjectIds: [mathsSubjectId]
+      });
     assert.equal(teacher2.status, 201);
+    teacher2Id = teacher2.body.user.id;
 
     const student = await adminAgent
       .post("/api/admin/users")
@@ -210,6 +258,7 @@ test("secured portal end-to-end API flow", async t => {
 
     const bootstrap = await teacherAgent.get("/api/teacher/bootstrap");
     assert.equal(bootstrap.status, 200);
+    assert.deepEqual(bootstrap.body.subjects.map(item => item.id).sort(), [mathsSubjectId, scienceSubjectId].sort());
 
     const teacher2Login = await login("teacher.two", teacher2.body.temporaryPassword);
     assert.equal(teacher2Login.response.status, 200);
@@ -242,13 +291,54 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(teacherOnAdmin.status, 403);
   });
 
+  await t.test("admin manages subjects and teacher assignments", async () => {
+    const created = await adminAgent
+      .post("/api/admin/subjects")
+      .set(CSRF)
+      .send({ name: "English" });
+    assert.equal(created.status, 201);
+
+    const renamed = await adminAgent
+      .patch(`/api/admin/subjects/${created.body.subject.id}`)
+      .set(CSRF)
+      .send({ name: "English Studies" });
+    assert.equal(renamed.status, 200);
+
+    const assigned = await adminAgent
+      .patch(`/api/admin/users/${teacher2Id}`)
+      .set(CSRF)
+      .send({ subjectIds: [mathsSubjectId, created.body.subject.id] });
+    assert.equal(assigned.status, 200);
+    assert.deepEqual(assigned.body.user.subjectIds.sort(), [mathsSubjectId, created.body.subject.id].sort());
+
+    const bootstrap = await adminAgent.get("/api/admin/bootstrap");
+    assert.ok(bootstrap.body.subjects.some(item => item.name === "English Studies"));
+    assert.ok(bootstrap.body.users.some(user =>
+      user.id === teacher2Id && user.subjectNames.includes("English Studies")
+    ));
+
+    const teacher2Bootstrap = await teacher2Agent.get("/api/teacher/bootstrap");
+    assert.ok(teacher2Bootstrap.body.subjects.some(item => item.name === "English Studies"));
+
+    const removed = await adminAgent
+      .delete(`/api/admin/subjects/${created.body.subject.id}`)
+      .set(CSRF);
+    assert.equal(removed.status, 200);
+
+    const restore = await adminAgent
+      .patch(`/api/admin/users/${teacher2Id}`)
+      .set(CSRF)
+      .send({ subjectIds: [mathsSubjectId] });
+    assert.equal(restore.status, 200);
+  });
+
   await t.test("teacher builds a question bank and a class quiz", async () => {
     const first = await teacherAgent
       .post("/api/teacher/questions")
       .set(CSRF)
       .send({
         questionText: "What is 7 + 5?",
-        subject: "Mathematics",
+        subjectId: mathsSubjectId,
         options: ["10", "12", "14", "9"],
         correctIndex: 1,
         solution: "7 + 5 = 12."
@@ -262,14 +352,39 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "Which number is even?",
-        subject: "Science",
+        subjectId: mathsSubjectId,
         options: ["3", "5", "8", "9"],
         correctIndex: 2,
         solution: "8 is divisible by 2."
       });
     assert.equal(second.status, 201);
-    assert.equal(second.body.question.subject, "Science");
+    assert.equal(second.body.question.subject, "Mathematics");
     secondQuestionId = second.body.question.id;
+
+    const science = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "Which force keeps planets in orbit?",
+        subjectId: scienceSubjectId,
+        options: ["Gravity", "Magnetism", "Friction", "Tension"],
+        correctIndex: 0,
+        solution: "Gravity governs orbital motion."
+      });
+    assert.equal(science.status, 201);
+    scienceQuestionId = science.body.question.id;
+
+    const unassignedSubject = await teacher2Agent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is photosynthesis?",
+        subjectId: scienceSubjectId,
+        options: ["Respiration", "Photosynthesis", "Digestion", "Condensation"],
+        correctIndex: 1,
+        solution: "Plants convert light into chemical energy."
+      });
+    assert.equal(unassignedSubject.status, 403);
 
     const quiz = await teacherAgent
       .post("/api/teacher/quizzes")
@@ -277,11 +392,24 @@ test("secured portal end-to-end API flow", async t => {
       .send({
         title: "Numbers Check",
         classId,
+        subjectId: mathsSubjectId,
         minutes: 20,
         questionIds: [firstQuestionId, secondQuestionId]
       });
     assert.equal(quiz.status, 201);
     quizId = quiz.body.quiz.id;
+
+    const mixedSubjects = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Mixed Subjects",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 20,
+        questionIds: [firstQuestionId, scienceQuestionId]
+      });
+    assert.equal(mixedSubjects.status, 400);
 
     const otherTeacherQuiz = await teacher2Agent
       .post("/api/teacher/quizzes")
@@ -289,6 +417,7 @@ test("secured portal end-to-end API flow", async t => {
       .send({
         title: "Should not work",
         classId,
+        subjectId: mathsSubjectId,
         minutes: 20,
         questionIds: [firstQuestionId]
       });
@@ -462,6 +591,24 @@ test("secured portal end-to-end API flow", async t => {
     student2Id = student2.body.user.id;
     student2TempPassword = student2.body.temporaryPassword;
 
+    const roster = await teacherAgent.get("/api/teacher/students");
+    assert.equal(roster.status, 200);
+    assert.ok(roster.body.students.some(student => student.id === student2Id));
+
+    const moved = await teacherAgent
+      .patch(`/api/teacher/students/${student2Id}`)
+      .set(CSRF)
+      .send({ classId: secondClassId });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.student.className, "Basic 8B");
+
+    const movedBack = await teacherAgent
+      .patch(`/api/teacher/students/${student2Id}`)
+      .set(CSRF)
+      .send({ classId });
+    assert.equal(movedBack.status, 200);
+    assert.equal(movedBack.body.student.className, "Basic 8A - Gold");
+
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const { response } = await login("student.two", `WrongPass${attempt}9`);
       assert.equal(response.status, 401);
@@ -526,12 +673,42 @@ test("secured portal end-to-end API flow", async t => {
     const updated = await adminAgent
       .put("/api/admin/settings")
       .set(CSRF)
-      .send({ defaultQuizMinutes: 30 });
+      .send({
+        defaultQuizMinutes: 30,
+        minQuizMinutes: 5,
+        maxQuizMinutes: 120,
+        minQuestions: 2,
+        maxQuestions: 50,
+        passMark: 60,
+        maxAttempts: 3,
+        requireApproval: false,
+        showSolutions: true,
+        allowRetakes: true
+      });
     assert.equal(updated.status, 200);
+    assert.equal(updated.body.settings.passMark, 60);
+    assert.equal(updated.body.settings.maxAttempts, 3);
 
     const bootstrap = await teacherAgent.get("/api/teacher/bootstrap");
     assert.equal(bootstrap.status, 200);
     assert.equal(bootstrap.body.settings.defaultQuizMinutes, 30);
+    assert.equal(bootstrap.body.settings.minQuizMinutes, 5);
+
+    await adminAgent
+      .put("/api/admin/settings")
+      .set(CSRF)
+      .send({
+        defaultQuizMinutes: 45,
+        minQuizMinutes: 1,
+        maxQuizMinutes: 240,
+        minQuestions: 1,
+        maxQuestions: 200,
+        passMark: 50,
+        maxAttempts: 0,
+        requireApproval: false,
+        showSolutions: true,
+        allowRetakes: true
+      });
   });
 
   await t.test("weak passwords are rejected", async () => {
@@ -593,6 +770,7 @@ test("secured portal end-to-end API flow", async t => {
       .send({
         title: "Shuffle Quiz",
         classId,
+        subjectId: mathsSubjectId,
         minutes: 20,
         shuffleQuestions: true,
         questionIds: [firstQuestionId]
@@ -609,6 +787,7 @@ test("secured portal end-to-end API flow", async t => {
       .send({
         title: "Shuffle Quiz",
         classId,
+        subjectId: mathsSubjectId,
         minutes: 20,
         shuffleQuestions: true,
         questionIds: [firstQuestionId, secondQuestionId]
@@ -630,6 +809,73 @@ test("secured portal end-to-end API flow", async t => {
 
     const attempt = await getDocById("attempts", started.body.attemptId);
     assert.deepEqual(attempt.question_order, [0, 1]);
+  });
+
+  await t.test("admin approval controls student quiz visibility", async () => {
+    await adminAgent
+      .put("/api/admin/settings")
+      .set(CSRF)
+      .send({ requireApproval: true });
+
+    const created = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Approval Quiz",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 20,
+        questionIds: [firstQuestionId]
+      });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.quiz.approved, false);
+
+    const before = await studentAgent.get("/api/student/dashboard");
+    assert.equal(before.status, 200);
+    assert.equal(before.body.quizzes.some(quiz => quiz.id === created.body.quiz.id), false);
+
+    const approved = await adminAgent
+      .patch(`/api/admin/quizzes/${created.body.quiz.id}`)
+      .set(CSRF)
+      .send({ approved: true, isOpen: true });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.quiz.approved, true);
+
+    const after = await studentAgent.get("/api/student/dashboard");
+    assert.ok(after.body.quizzes.some(quiz => quiz.id === created.body.quiz.id));
+
+    const blocked = await studentAgent
+      .post(`/api/student/quizzes/${created.body.quiz.id}/start`)
+      .set(CSRF)
+      .send({ mode: "Practice" });
+    assert.equal(blocked.status, 200);
+
+    await adminAgent
+      .put("/api/admin/settings")
+      .set(CSRF)
+      .send({ requireApproval: false });
+  });
+
+  await t.test("admin can hide worked solutions from students", async () => {
+    await adminAgent
+      .put("/api/admin/settings")
+      .set(CSRF)
+      .send({ showSolutions: false });
+
+    const hidden = await studentAgent.get(`/api/submissions/${practiceSubmissionId}`);
+    assert.equal(hidden.status, 200);
+    assert.equal(hidden.body.submission.questions[0].correctIndex, undefined);
+    assert.equal(hidden.body.submission.questions[0].solution, undefined);
+    assert.equal(hidden.body.submission.questions[0].isCorrect, undefined);
+
+    const teacherView = await teacherAgent.get(`/api/submissions/${practiceSubmissionId}`);
+    assert.equal(teacherView.body.submission.questions[0].correctIndex, 1);
+    assert.equal(teacherView.body.submission.questions[0].isCorrect, true);
+
+    await adminAgent
+      .put("/api/admin/settings")
+      .set(CSRF)
+      .send({ showSolutions: true });
   });
 
   await t.test("importStudentsFromWorkbook parses rows from an Excel workbook buffer", async () => {

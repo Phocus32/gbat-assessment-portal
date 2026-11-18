@@ -14,8 +14,10 @@ const ROLE_LABEL = {
 const NAV_ITEMS = {
   admin: [
     ["overview", "Overview"],
+    ["subjects", "Subjects"],
     ["classes", "Classes"],
     ["users", "Users"],
+    ["quizzes", "Quizzes"],
     ["activity", "Activity"],
     ["settings", "Settings"]
   ],
@@ -23,6 +25,7 @@ const NAV_ITEMS = {
     ["overview", "Overview"],
     ["questions", "Question bank"],
     ["quizzes", "Quizzes"],
+    ["students", "Students"],
     ["results", "Results"],
     ["submissions", "Submissions"],
     ["announcements", "Announcements"]
@@ -109,7 +112,7 @@ function diagramHtml(value) {
 }
 
 function fmtDate(value) {
-  if (!value) return "â€”";
+  if (!value) return "—";
   return String(value).replace("T", " ").slice(0, 16);
 }
 
@@ -132,6 +135,55 @@ function groupQuestionsBySubject(questions) {
   return [...groups.values()].sort((a, b) => a.subject.localeCompare(b.subject));
 }
 
+function subjectName(id) {
+  const subject = (state.data && state.data.subjects || []).find(item => Number(item.id) === Number(id));
+  return subject ? subject.name : "General";
+}
+
+function availableSubjects() {
+  return (state.data && state.data.subjects) || [];
+}
+
+function checkbox(value, checked) {
+  return `<input type="checkbox" name="subjectIds" value="${Number(value)}" ${checked ? "checked" : ""}>`;
+}
+
+/** Adds data-label attributes so tables can become labelled cards on phones. */
+function labelTableCells(root = document) {
+  root.querySelectorAll("table").forEach(table => {
+    const headers = [...table.querySelectorAll("thead th")].map(th =>
+      String(th.textContent || "").replace(/\s+/g, " ").trim()
+    );
+    table.querySelectorAll("tbody tr").forEach(row => {
+      [...row.querySelectorAll("td")].forEach((cell, index) => {
+        if (!cell.dataset.label && headers[index]) cell.dataset.label = headers[index];
+      });
+    });
+  });
+}
+
+function applyFormVisibility() {
+  const quizForm = document.querySelector('form[data-form="create-quiz"]');
+  if (quizForm) {
+    const select = quizForm.querySelector('select[name="subjectId"]');
+    const subjectId = select ? Number(select.value) : 0;
+    quizForm.querySelectorAll(".check-group").forEach(group => {
+      const match = !subjectId || Number(group.dataset.subjectId) === subjectId;
+      group.hidden = !match;
+      if (!match) group.querySelectorAll('input[name="questionIds"]').forEach(box => {
+        box.checked = false;
+      });
+    });
+  }
+
+  const userForm = document.querySelector('form[data-form="create-user"]');
+  if (userForm) {
+    const role = userForm.querySelector('select[name="role"]');
+    const subjects = userForm.querySelector("[data-teacher-subjects]");
+    if (subjects) subjects.hidden = !role || role.value !== "teacher";
+  }
+}
+
 function defaultView(role) {
   if (role === "student") return "dashboard";
   return "overview";
@@ -151,6 +203,8 @@ function closeModal() {
 
 function openModal(html) {
   modalContent.innerHTML = html;
+  labelTableCells(modalContent);
+  applyFormVisibility();
   if (!modalEl.open) modalEl.showModal();
 }
 
@@ -229,7 +283,7 @@ function showLogin(message = "") {
   state.results = null;
   state.resultsQuizId = null;
   state.importCredentials = [];
-  document.title = "Sign in Â· GBAT Online Assessment Portal";
+  document.title = "Sign in · GBAT Online Assessment Portal";
   renderLogin();
 }
 
@@ -237,7 +291,7 @@ function showPassword(forced) {
   clearTimer();
   state.screen = "password";
   state.passwordForced = Boolean(forced || (state.user && state.user.mustChangePassword));
-  document.title = "Password Â· GBAT Online Assessment Portal";
+  document.title = "Password · GBAT Online Assessment Portal";
   renderPassword();
 }
 
@@ -402,7 +456,7 @@ function navTo(view) {
 function renderShell() {
   const user = state.user;
   if (!state.data) {
-    appEl.innerHTML = `<div class="auth-main"><div class="auth-card"><h2>Loading portalâ€¦</h2></div></div>`;
+    appEl.innerHTML = `<div class="auth-main"><div class="auth-card"><h2>Loading portal…</h2></div></div>`;
     return;
   }
 
@@ -411,7 +465,7 @@ function renderShell() {
   `).join("");
 
   const roleLabel = ROLE_LABEL[user.role] || user.role;
-  document.title = `${roleLabel} Â· GBAT Online Assessment Portal`;
+  document.title = `${roleLabel} · GBAT Online Assessment Portal`;
 
   appEl.innerHTML = `
     <div class="app-frame">
@@ -428,7 +482,7 @@ function renderShell() {
           <div class="topbar-user">
             <div class="user-meta">
               <strong>${esc(user.name)}</strong>
-              <span>${esc(roleLabel)}${user.className ? ` Â· ${esc(user.className)}` : ""}</span>
+              <span>${esc(roleLabel)}${user.className ? ` · ${esc(user.className)}` : ""}</span>
             </div>
             <button type="button" class="btn btn-sm btn-ghost" data-action="open-password">Password</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="logout">Sign out</button>
@@ -436,8 +490,10 @@ function renderShell() {
         </div>
       </header>
       <main class="page">${renderView()}</main>
-      <footer class="footer">GBAT Online Assessment Portal Â· Accounts and data are private to this school.</footer>
+      <footer class="footer">GBAT Online Assessment Portal · Accounts and data are private to this school.</footer>
     </div>`;
+  labelTableCells(appEl);
+  applyFormVisibility();
 }
 
 function renderView() {
@@ -462,7 +518,7 @@ function badge(label, tone = "neutral") {
 function emptyState(title, text) {
   return `
     <div class="empty">
-      <span class="empty-mark">Â·</span>
+      <span class="empty-mark">·</span>
       <h3>${esc(title)}</h3>
       <p>${esc(text)}</p>
     </div>`;
@@ -483,8 +539,10 @@ function pageHead(eyebrow, title, subtitle, actions = "") {
 /* Admin */
 
 function renderAdminView() {
+  if (state.view === "subjects") return renderAdminSubjects();
   if (state.view === "classes") return renderAdminClasses();
   if (state.view === "users") return renderAdminUsers();
+  if (state.view === "quizzes") return renderAdminQuizzes();
   if (state.view === "activity") return renderAdminActivity();
   if (state.view === "settings") return renderAdminSettings();
   return renderAdminOverview();
@@ -502,6 +560,7 @@ function renderAdminOverview() {
       ${statCard("Classes", d.stats.classes)}
       ${statCard("Portal average", `${d.stats.average}%`, "Across submitted attempts")}
       ${statCard("Open quizzes", d.stats.openQuizzes)}
+      ${statCard("Pending approval", d.stats.pendingApproval, "Teacher quizzes awaiting review")}
     </div>
     <div class="grid-2">
       <section class="panel">
@@ -582,7 +641,7 @@ function renderAdminUsers() {
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Name</th><th>Role</th><th>Class</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr>
+              <tr><th>Name</th><th>Role</th><th>Class</th><th>Subjects</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr>
             </thead>
             <tbody>
               ${users.map(user => {
@@ -596,6 +655,7 @@ function renderAdminUsers() {
                       <button type="button" class="btn btn-sm btn-ghost" data-action="reset-password" data-id="${user.id}">Reset password</button>
                       <button type="button" class="btn btn-sm ${user.active ? "btn-danger" : "btn-success"}" data-action="toggle-user" data-id="${user.id}">${user.active ? "Suspend" : "Activate"}</button>
                       ${user.role === "student" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-move-user" data-id="${user.id}">Move class</button>` : ""}
+                      ${user.role === "teacher" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-assign-subjects" data-id="${user.id}">Assign subjects</button>` : ""}
                       <button type="button" class="btn btn-sm btn-ghost" data-action="delete-user" data-id="${user.id}">Delete</button>
                     </div>`;
                 }
@@ -606,7 +666,10 @@ function renderAdminUsers() {
                       <span class="cell-sub">${esc(user.username)}</span>
                     </td>
                     <td>${badge(ROLE_LABEL[user.role] || user.role, user.role === "admin" ? "brand" : "neutral")}</td>
-                    <td>${esc(user.className || "â€”")}</td>
+                    <td>${esc(user.className || "—")}</td>
+                    <td>${user.subjectNames && user.subjectNames.length
+                      ? user.subjectNames.map(name => badge(name, "brand")).join(" ")
+                      : esc("—")}</td>
                     <td>${status}${temp}</td>
                     <td class="nowrap">${esc(fmtDate(user.lastLoginAt))}</td>
                     <td>${actions}</td>
@@ -615,6 +678,79 @@ function renderAdminUsers() {
             </tbody>
           </table>
         </div>` : emptyState("No accounts yet", "Add a teacher or student account to get started.")}
+    </section>`;
+}
+
+function renderAdminSubjects() {
+  const subjects = availableSubjects();
+  return `
+    ${pageHead("Question bank", "Subjects", "Subjects keep teacher banks and quizzes separate. Renaming a subject never breaks existing questions.",
+      `<button type="button" class="btn btn-primary" data-action="open-create-subject">Add subject</button>`)}
+    <section class="panel">
+      <div class="panel-head"><h2 class="panel-title">${esc(subjects.length)} subject${subjects.length === 1 ? "" : "s"}</h2></div>
+      ${subjects.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Subject</th><th>Teachers</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>
+              ${subjects.map(subject => {
+                const teachers = state.data.users.filter(user =>
+                  user.role === "teacher" && (user.subjectIds || []).map(Number).includes(Number(subject.id))
+                );
+                return `
+                  <tr>
+                    <td><strong>${esc(subject.name)}</strong></td>
+                    <td>${esc(teachers.map(user => user.name).join(", ") || "—")}</td>
+                    <td class="nowrap">${esc(fmtDate(subject.createdAt))}</td>
+                    <td>
+                      <div class="row-actions">
+                        <button type="button" class="btn btn-sm btn-ghost" data-action="open-rename-subject" data-id="${subject.id}">Rename</button>
+                        <button type="button" class="btn btn-sm btn-danger" data-action="delete-subject" data-id="${subject.id}">Delete</button>
+                      </div>
+                    </td>
+                  </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>` : emptyState("No subjects yet", "Add a subject before creating questions or assigning teachers.")}
+    </section>`;
+}
+
+function renderAdminQuizzes() {
+  const quizzes = state.data.quizzes || [];
+  const s = state.data.settings;
+  return `
+    ${pageHead("Governance", "Quizzes", "Review teacher-created quizzes, approvals and published availability.",
+      `<button type="button" class="btn" data-action="nav" data-view="settings">Quiz rules</button>`)}
+    <div class="notice">Teacher quizzes${s.requireApproval ? " require your approval before students can see them" : " open automatically unless you close them"}. Duration and question counts are limited to ${esc(s.minQuizMinutes)}–${esc(s.maxQuizMinutes)} minutes and ${esc(s.minQuestions)}–${esc(s.maxQuestions)} questions.</div>
+    <section class="panel mt-1">
+      <div class="panel-head"><h2 class="panel-title">${esc(quizzes.length)} quiz${quizzes.length === 1 ? "" : "zes"}</h2></div>
+      ${quizzes.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Quiz</th><th>Teacher</th><th>Subject</th><th>Class</th><th>Questions</th><th>Approval</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              ${quizzes.map(quiz => `
+                <tr>
+                  <td><strong>${esc(quiz.title)}</strong><span class="cell-sub">${esc(fmtDate(quiz.createdAt))}</span></td>
+                  <td>${esc(quiz.teacherName)}</td>
+                  <td>${esc(quiz.subjectName)}</td>
+                  <td>${esc(quiz.className || "—")}</td>
+                  <td>${esc(quiz.questionCount)}</td>
+                  <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
+                  <td>${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}</td>
+                  <td>
+                    <div class="row-actions">
+                      ${quiz.approved
+                        ? `<button type="button" class="btn btn-sm btn-ghost" data-action="unapprove-quiz" data-id="${quiz.id}">Return</button>`
+                        : `<button type="button" class="btn btn-sm btn-success" data-action="approve-quiz" data-id="${quiz.id}">Approve</button>`}
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="admin-toggle-quiz" data-id="${quiz.id}">${quiz.isOpen ? "Close" : "Open"}</button>
+                    </div>
+                  </td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` : emptyState("No quizzes yet", "Teacher-created quizzes will appear here for review.")}
     </section>`;
 }
 
@@ -684,32 +820,68 @@ function renderAdminActivity() {
 }
 
 function renderAdminSettings() {
-  const d = state.data;
+  const s = state.data.settings;
+  const rule = (name, label, checked, description) => `
+    <label class="check-item">
+      <input type="checkbox" name="${name}" ${checked ? "checked" : ""}>
+      <span><strong>${esc(label)}</strong><small>${esc(description)}</small></span>
+    </label>`;
   return `
-    ${pageHead("Configuration", "Settings", "Portal-wide defaults and administrator account policy.")}
-    <div class="grid-2">
-      <section class="panel">
-        <div class="panel-head"><h2 class="panel-title">Quiz defaults</h2></div>
-        <div class="panel-body">
-          <form class="form" data-form="settings">
+    ${pageHead("Configuration", "Settings", "One place for every quiz limit, approval rule and student-facing policy.")}
+    <form class="form" data-form="settings">
+      <div class="grid-2">
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Duration and questions</h2></div>
+          <div class="panel-body form-grid two">
             <div class="field">
-              <label for="default-minutes">Default quiz duration (minutes)</label>
-              <input id="default-minutes" name="defaultQuizMinutes" type="number" min="1" max="240" value="${esc(d.settings.defaultQuizMinutes)}" required>
+              <label for="min-minutes">Minimum duration (minutes)</label>
+              <input id="min-minutes" name="minQuizMinutes" type="number" min="1" max="240" value="${esc(s.minQuizMinutes)}" required>
             </div>
-            <p class="form-note">Teachers can adjust each quiz duration. This value is the starting point.</p>
-            <p class="form-error" data-form-error role="alert"></p>
-            <div><button type="submit" class="btn btn-primary">Save settings</button></div>
-          </form>
-        </div>
-      </section>
-      <section class="panel">
+            <div class="field">
+              <label for="default-minutes">Default duration (minutes)</label>
+              <input id="default-minutes" name="defaultQuizMinutes" type="number" min="1" max="240" value="${esc(s.defaultQuizMinutes)}" required>
+            </div>
+            <div class="field">
+              <label for="max-minutes">Maximum duration (minutes)</label>
+              <input id="max-minutes" name="maxQuizMinutes" type="number" min="1" max="240" value="${esc(s.maxQuizMinutes)}" required>
+            </div>
+            <div class="field">
+              <label for="min-questions">Minimum questions per quiz</label>
+              <input id="min-questions" name="minQuestions" type="number" min="1" max="200" value="${esc(s.minQuestions)}" required>
+            </div>
+            <div class="field">
+              <label for="max-questions">Maximum questions per quiz</label>
+              <input id="max-questions" name="maxQuestions" type="number" min="1" max="200" value="${esc(s.maxQuestions)}" required>
+            </div>
+            <div class="field">
+              <label for="pass-mark">Pass mark (%)</label>
+              <input id="pass-mark" name="passMark" type="number" min="1" max="100" value="${esc(s.passMark)}" required>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Publishing and students</h2></div>
+          <div class="panel-body stack">
+            ${rule("requireApproval", "Require approval before students see a quiz", s.requireApproval, "New teacher quizzes stay hidden until you approve them.")}
+            ${rule("showSolutions", "Show worked solutions to students", s.showSolutions, "When off, answer keys and solutions are hidden from student result views.")}
+            ${rule("allowRetakes", "Allow retakes", s.allowRetakes, "When off, a student can submit each quiz only once.")}
+            <div class="field">
+              <label for="max-attempts">Maximum attempts per quiz (0 = unlimited)</label>
+              <input id="max-attempts" name="maxAttempts" type="number" min="0" max="50" value="${esc(s.maxAttempts)}" required>
+            </div>
+          </div>
+        </section>
+      </div>
+      <section class="panel mt-1">
         <div class="panel-head"><h2 class="panel-title">Administrator accounts</h2></div>
         <div class="panel-body stack">
           <p class="small">Administrator accounts are created only on the server with <strong>npm run create-admin</strong>. They cannot be created, suspended or password-reset from this screen.</p>
           <div class="notice warn">This protects the highest level of access. Keep administrator credentials offline and share them with as few people as possible.</div>
         </div>
       </section>
-    </div>`;
+      <p class="form-error mt-1" data-form-error role="alert"></p>
+      <div class="mt-05"><button type="submit" class="btn btn-primary">Save settings</button></div>
+    </form>`;
 }
 
 /* Teacher */
@@ -717,6 +889,7 @@ function renderAdminSettings() {
 function renderTeacherView() {
   if (state.view === "questions") return renderTeacherQuestions();
   if (state.view === "quizzes") return renderTeacherQuizzes();
+  if (state.view === "students") return renderTeacherStudents();
   if (state.view === "results") return renderTeacherResults();
   if (state.view === "submissions") return renderTeacherSubmissions();
   if (state.view === "announcements") return renderTeacherAnnouncements();
@@ -728,7 +901,7 @@ function renderTeacherOverview() {
   const recent = d.submissions.slice(0, 8);
   const hardest = d.hardestQuestion;
   return `
-    ${pageHead("Teacher", "Overview", `Welcome, ${state.user.name}. Build questions, publish quizzes and review results.`,
+    ${pageHead("Teacher", "Overview", `Welcome, ${state.user.name}. Your subjects: ${availableSubjects().map(item => item.name).join(", ") || "not assigned"}.`,
       `<a class="btn" href="/api/teacher/students/template.xlsx">Student Excel template</a>
        <button type="button" class="btn" data-action="nav" data-view="questions">Add question</button>
        <button type="button" class="btn btn-primary" data-action="nav" data-view="quizzes">Create quiz</button>`)}
@@ -785,7 +958,7 @@ function renderTeacherOverview() {
                         ${quiz.shuffleQuestions ? badge("Shuffled", "brand") : ""}
                       </span>
                     </div>
-                    <p class="quiz-meta"><span>${esc(quiz.className)}</span><span>${esc(quiz.questionCount)} questions</span><span>${esc(quiz.minutes)} min</span></p>
+                    <p class="quiz-meta"><span>${esc(quiz.subjectName || subjectName(quiz.subjectId))}</span><span>${esc(quiz.className)}</span><span>${esc(quiz.questionCount)} questions</span><span>${esc(quiz.minutes)} min</span></p>
                     <div class="quiz-actions">
                       <button type="button" class="btn btn-sm" data-action="view-quiz-results" data-id="${quiz.id}">Results</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-quiz" data-id="${quiz.id}">Close quiz</button>
@@ -808,12 +981,11 @@ function renderTeacherQuestions() {
       <div class="panel-body">
         <form class="form" data-form="add-question">
           <div class="field">
-            <label for="question-subject">Subject / group</label>
-            <input id="question-subject" name="subject" type="text" list="subject-options" maxlength="120" required placeholder="e.g. Mathematics">
-            <datalist id="subject-options">
-              ${groups.map(group => `<option value="${esc(group.subject)}"></option>`).join("")}
-            </datalist>
-            <p class="form-note">Questions are grouped under this title in your bank.</p>
+            <label for="question-subject">Subject</label>
+            <select id="question-subject" name="subjectId" required>
+              ${availableSubjects().map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
+            </select>
+            <p class="form-note">You can only add questions to subjects assigned to you by the administrator.</p>
           </div>
           <div class="field">
             <label for="question-text">Question</label>
@@ -901,15 +1073,21 @@ function renderTeacherQuizzes() {
                   ${d.classes.map(cls => `<option value="${cls.id}">${esc(cls.name)}</option>`).join("")}
                 </select>
               </div>
+              <div class="field">
+                <label for="quiz-subject">Subject</label>
+                <select id="quiz-subject" name="subjectId" required>
+                  ${availableSubjects().map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
+                </select>
+              </div>
             </div>
             <div class="form-row">
               <div class="field">
                 <label for="quiz-minutes">Duration (minutes)</label>
-                <input id="quiz-minutes" name="minutes" type="number" min="1" max="240" value="${esc(defaultMinutes)}" required>
+                <input id="quiz-minutes" name="minutes" type="number" min="${esc(d.settings.minQuizMinutes)}" max="${esc(d.settings.maxQuizMinutes)}" value="${esc(defaultMinutes)}" required>
               </div>
               <div class="field">
                 <span class="field-label">Availability</span>
-                <p class="form-note">The quiz opens immediately. You can close it at any time.</p>
+                <p class="form-note">Allowed: ${esc(d.settings.minQuizMinutes)}–${esc(d.settings.maxQuizMinutes)} minutes and ${esc(d.settings.minQuestions)}–${esc(d.settings.maxQuestions)} questions.${d.settings.requireApproval ? " An administrator must approve this quiz before students see it." : " The quiz opens immediately."}</p>
               </div>
             </div>
             <div class="field">
@@ -928,7 +1106,7 @@ function renderTeacherQuizzes() {
               </div>
               <div class="checkbox-groups">
                 ${groups.map(group => `
-                  <section class="check-group">
+                  <section class="check-group" data-subject-id="${group.questions[0] && group.questions[0].subjectId || ""}">
                     <div class="check-group-head">
                       <strong>${esc(group.subject)}</strong>
                       <span class="cell-sub">${esc(group.questions.length)} question${group.questions.length === 1 ? "" : "s"}</span>
@@ -962,15 +1140,17 @@ function renderTeacherQuizzes() {
       ${d.quizzes.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Quiz</th><th>Class</th><th>Questions</th><th>Duration</th><th>Order</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Quiz</th><th>Subject</th><th>Class</th><th>Questions</th><th>Duration</th><th>Order</th><th>Approval</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
             <tbody>
               ${d.quizzes.map(quiz => `
                 <tr>
                   <td><strong>${esc(quiz.title)}</strong></td>
+                  <td>${esc(quiz.subjectName || subjectName(quiz.subjectId))}</td>
                   <td>${esc(quiz.className)}</td>
                   <td>${esc(quiz.questionCount)}</td>
                   <td>${esc(quiz.minutes)} min</td>
                   <td>${quiz.shuffleQuestions ? badge("Shuffled", "brand") : badge("Fixed", "neutral")}</td>
+                  <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
                   <td>${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}</td>
                   <td class="nowrap">${esc(fmtDate(quiz.createdAt))}</td>
                   <td>
@@ -986,6 +1166,58 @@ function renderTeacherQuizzes() {
           </table>
         </div>` : emptyState("No quizzes yet", "Create a quiz from the form above.")}
     </section>`;
+}
+
+function renderTeacherStudents() {
+  const students = state.data.students || [];
+  const classes = state.data.classes || [];
+  const grouped = classes.map(cls => ({
+    cls,
+    students: students.filter(student => Number(student.classId) === Number(cls.id))
+  }));
+  const unassigned = students.filter(student => !student.classId);
+  return `
+    ${pageHead("Roster", "Students", "Move a student between classes. Results stay attached to their attempts.",
+      `<a class="btn" href="/api/teacher/students/template.xlsx">Student Excel template</a>`)}
+    <div class="grid-2">
+      ${grouped.map(group => `
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="panel-title">${esc(group.cls.name)}</h2>
+            ${badge(`${group.students.length} student${group.students.length === 1 ? "" : "s"}`)}
+          </div>
+          ${group.students.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Student</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                  ${group.students.map(student => `
+                    <tr>
+                      <td><strong>${esc(student.name)}</strong><span class="cell-sub">${esc(student.username)}</span></td>
+                      <td>${student.active ? badge("Active", "ok") : badge("Suspended", "danger")}</td>
+                      <td><button type="button" class="btn btn-sm btn-ghost" data-action="open-move-student" data-id="${student.id}">Move class</button></td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>` : emptyState("No students", "Students assigned to this class will appear here.")}
+        </section>`).join("")}
+      ${unassigned.length ? `
+        <section class="panel">
+          <div class="panel-head"><h2 class="panel-title">Unassigned</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Student</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${unassigned.map(student => `
+                  <tr>
+                    <td><strong>${esc(student.name)}</strong></td>
+                    <td><button type="button" class="btn btn-sm btn-ghost" data-action="open-move-student" data-id="${student.id}">Assign class</button></td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+        </section>` : ""}
+    </div>`;
 }
 
 function renderTeacherResults() {
@@ -1019,7 +1251,7 @@ function renderTeacherResults() {
   const quiz = result.quiz;
   const attempted = result.students.filter(student => student.bestPct !== null);
   return `
-    ${pageHead("Performance", quiz.title, `${quiz.className} Â· ${quiz.minutes} minute quiz Â· ${quiz.isOpen ? "Open" : "Closed"}`,
+    ${pageHead("Performance", quiz.title, `${quiz.className} · ${quiz.minutes} minute quiz · ${quiz.isOpen ? "Open" : "Closed"}`,
       `<button type="button" class="btn" data-action="nav" data-view="quizzes">Back to quizzes</button>
        <a class="btn btn-primary" href="/api/teacher/quizzes/${Number(quiz.id)}/results.csv">Download CSV</a>`)}
     <div class="stat-grid">
@@ -1043,8 +1275,8 @@ function renderTeacherResults() {
                     <td>${esc(student.username)}</td>
                     <td>${esc(student.attempts)}</td>
                     <td>${student.bestPct === null
-                      ? `<span class="muted">â€”</span>`
-                      : `<strong>${esc(student.bestPct)}%</strong><span class="cell-sub">${esc(student.bestScore)}/${esc(student.bestTotal)} Â· ${esc(student.bestMode)}</span>`}</td>
+                      ? `<span class="muted">—</span>`
+                      : `<strong>${esc(student.bestPct)}%</strong><span class="cell-sub">${esc(student.bestScore)}/${esc(student.bestTotal)} · ${esc(student.bestMode)}</span>`}</td>
                     <td class="nowrap">${esc(fmtDate(student.lastAttemptAt))}</td>
                     <td>${student.bestSubmissionId
                       ? `<button type="button" class="btn btn-sm btn-ghost" data-action="inspect-submission" data-id="${student.bestSubmissionId}">Inspect</button>`
@@ -1089,7 +1321,7 @@ function renderTeacherSubmissions() {
                 <tr>
                   <td>
                     <strong>${esc(item.studentName)}</strong>
-                    <span class="cell-sub">${esc(item.studentUsername)} Â· ${esc(item.className)}</span>
+                    <span class="cell-sub">${esc(item.studentUsername)} · ${esc(item.className)}</span>
                   </td>
                   <td>${esc(item.quizTitle)}</td>
                   <td>${badge(item.mode, item.mode === "Exam" ? "warn" : "brand")}</td>
@@ -1148,22 +1380,26 @@ function renderStudentView() {
 function renderStudentDashboard() {
   const d = state.data;
   return `
-    ${pageHead("Student", `Hello, ${state.user.name}`, d.class ? `${d.class.name} Â· Your private assessment dashboard.` : "Your private assessment dashboard.",
+    ${pageHead("Student", `Hello, ${state.user.name}`, d.class ? `${d.class.name} · Your private assessment dashboard.` : "Your private assessment dashboard.",
       `<button type="button" class="btn" data-action="nav" data-view="results">My results</button>`)}
     <div class="stat-grid">
       ${statCard("Class", d.class ? d.class.name : "Unassigned")}
       ${statCard("Open quizzes", d.stats.available)}
       ${statCard("Quizzes taken", d.stats.quizzesTaken)}
       ${statCard("Average", `${d.stats.average}%`, "Best attempt per quiz")}
-      ${statCard("Passed", d.stats.passed, "Best score of 50% or more")}
+      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`)}
     </div>
     <div class="grid-2">
       <section class="panel">
         <div class="panel-head"><h2 class="panel-title">How attempts work</h2></div>
         <div class="panel-body stack">
-          <div class="notice"><strong>Practice</strong> is untimed and shows the correct answer and worked solution immediately after each question.</div>
+          <div class="notice"><strong>Practice</strong> is untimed and${d.settings.showSolutions ? " shows the correct answer and worked solution immediately after each question" : " does not reveal answers until your administrator enables worked solutions"}.</div>
           <div class="notice warn"><strong>Exam</strong> is timed and never reveals correctness until you submit. Once you choose an answer, it cannot be changed.</div>
-          <p class="form-note">Starting the same mode again resumes an unfinished attempt. You can submit multiple practice or exam attempts.</p>
+          <p class="form-note">Starting the same mode again resumes an unfinished attempt. ${!d.settings.allowRetakes
+            ? "Retakes are disabled; each quiz can be submitted once."
+            : d.settings.maxAttempts > 0
+              ? `You may submit up to ${esc(d.settings.maxAttempts)} attempt${d.settings.maxAttempts === 1 ? "" : "s"} per quiz.`
+              : "You may submit multiple practice or exam attempts."}</p>
         </div>
       </section>
       <section class="panel">
@@ -1173,7 +1409,7 @@ function renderStudentDashboard() {
             <div class="stack">
               ${d.announcements.map(item => `
                 <article>
-                  <p class="small pre-line"><strong>${esc(item.authorName)}</strong> Â· ${esc(fmtDate(item.createdAt))}</p>
+                  <p class="small pre-line"><strong>${esc(item.authorName)}</strong> · ${esc(fmtDate(item.createdAt))}</p>
                   <p class="small mt-025 pre-line">${esc(item.text)}</p>
                 </article>`).join("")}
             </div>` : emptyState("No announcements", "Your teachers have not posted any notices yet.")}
@@ -1214,11 +1450,13 @@ function renderStudentDashboard() {
 function renderStudentResults() {
   const d = state.data;
   return `
-    ${pageHead("Progress", "My results", "Scores are stored per submission. Open any result to review the worked solutions.")}
+    ${pageHead("Progress", "My results", d.settings.showSolutions
+      ? "Scores are stored per submission. Open any result to review the worked solutions."
+      : "Scores are stored per submission. Worked solutions are hidden by your administrator.")}
     <div class="stat-grid">
       ${statCard("Quizzes taken", d.stats.quizzesTaken)}
       ${statCard("Average", `${d.stats.average}%`)}
-      ${statCard("Passed", d.stats.passed, "Best score of 50% or more")}
+      ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`)}
     </div>
     <section class="panel">
       <div class="panel-head"><h2 class="panel-title">Submission history</h2></div>
@@ -1375,13 +1613,13 @@ function renderAttempt() {
             <span class="brand-mark">GBAT</span>
             <div>
               <strong>${esc(attempt.quiz.title)}</strong>
-              <span>${esc(attempt.quiz.className)} Â· ${esc(attempt.mode)} mode</span>
+              <span>${esc(attempt.quiz.className)} · ${esc(attempt.mode)} mode</span>
             </div>
           </div>
           <div class="runner-tools">
             ${timer}
             <button type="button" class="btn btn-ghost" data-action="exit-attempt">Exit</button>
-            <button type="button" class="btn btn-primary" data-action="submit-attempt" ${state.submitting ? "disabled" : ""}>${state.submitting ? "Submittingâ€¦" : "Submit"}</button>
+            <button type="button" class="btn btn-primary" data-action="submit-attempt" ${state.submitting ? "disabled" : ""}>${state.submitting ? "Submitting…" : "Submit"}</button>
           </div>
         </div>
       </header>
@@ -1414,7 +1652,7 @@ function renderAttempt() {
               </div>
               <div class="runner-actions-group">
                 <button type="button" class="btn btn-ghost" data-action="exit-attempt">Save &amp; exit</button>
-                <button type="button" class="btn btn-primary" data-action="submit-attempt" ${state.submitting ? "disabled" : ""}>${state.submitting ? "Submittingâ€¦" : "Submit attempt"}</button>
+                <button type="button" class="btn btn-primary" data-action="submit-attempt" ${state.submitting ? "disabled" : ""}>${state.submitting ? "Submitting…" : "Submit attempt"}</button>
               </div>
             </div>
           </section>
@@ -1527,25 +1765,29 @@ async function openSubmission(submissionId) {
 
 function submissionHtml(submission) {
   const questions = submission.questions.map(question => {
+    const answersVisible = question.correctIndex !== undefined;
     const options = question.options.map((option, index) => {
       let classes = "option-line";
-      if (index === question.correctIndex) classes += " correct";
-      else if (question.chosenIndex === index) classes += " wrong";
+      if (answersVisible && index === question.correctIndex) classes += " correct";
+      else if (question.chosenIndex === index) classes += answersVisible ? " wrong" : " selected";
       return `<li class="${classes}"><strong>${letter(index)}</strong><span>${esc(option)}</span></li>`;
     }).join("");
+    const answerLine = answersVisible
+      ? `Your answer: ${question.chosenIndex === null ? "Not answered" : `${letter(question.chosenIndex)}. ${esc(question.options[question.chosenIndex])}`} · Correct answer: ${letter(question.correctIndex)}. ${esc(question.options[question.correctIndex])}`
+      : `Your answer: ${question.chosenIndex === null ? "Not answered" : `${letter(question.chosenIndex)}. ${esc(question.options[question.chosenIndex])}`}`;
 
     return `
       <article class="review-card">
         <div class="review-head">
           <span class="pill">Question ${esc(question.position + 1)}</span>
           <span class="pill">${esc(subjectOf(question))}</span>
-          ${question.isCorrect ? badge("Correct", "ok") : badge("Incorrect", "danger")}
+          ${answersVisible ? (question.isCorrect ? badge("Correct", "ok") : badge("Incorrect", "danger")) : ""}
         </div>
         <p class="question-text">${esc(question.text)}</p>
         ${diagramHtml(question.diagramSvg)}
         <ul class="option-list">${options}</ul>
-        <p class="cell-sub">Your answer: ${question.chosenIndex === null ? "Not answered" : `${letter(question.chosenIndex)}. ${esc(question.options[question.chosenIndex])}`} Â· Correct answer: ${letter(question.correctIndex)}. ${esc(question.options[question.correctIndex])}</p>
-        <div class="solution-box mt-055"><strong>Worked solution</strong>${esc(question.solution)}</div>
+        <p class="cell-sub">${esc(answerLine)}</p>
+        ${answersVisible && question.solution ? `<div class="solution-box mt-055"><strong>Worked solution</strong>${esc(question.solution)}</div>` : ""}
       </article>`;
   }).join("");
 
@@ -1553,9 +1795,9 @@ function submissionHtml(submission) {
     <div class="modal-head">
       <div>
         <h2 id="modal-title">${esc(submission.quizTitle)}</h2>
-        <p>${esc(submission.studentName)} Â· ${esc(submission.className)} Â· ${esc(fmtDate(submission.submittedAt))}</p>
+        <p>${esc(submission.studentName)} · ${esc(submission.className)} · ${esc(fmtDate(submission.submittedAt))}</p>
       </div>
-      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Ã—</button>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
     </div>
     <div class="modal-body">
       <div class="result-banner">
@@ -1577,9 +1819,9 @@ function openTempPassword(user, password, title) {
     <div class="modal-head">
       <div>
         <h2 id="modal-title">${esc(title)}</h2>
-        <p>${esc(user.name)} Â· ${esc(user.username)}</p>
+        <p>${esc(user.name)} · ${esc(user.username)}</p>
       </div>
-      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Ã—</button>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
     </div>
     <div class="modal-body">
       <div class="notice warn">Share this password privately. It is shown only once, and the user must change it at their next sign-in.</div>
@@ -1677,7 +1919,7 @@ function openCreateUser() {
         <h2 id="modal-title">Add an account</h2>
         <p>A unique temporary password will be generated automatically.</p>
       </div>
-      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Ã—</button>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
     </div>
     <div class="modal-body">
       <form class="form" data-form="create-user">
@@ -1708,6 +1950,15 @@ function openCreateUser() {
             <span class="field-hint">Required for students. Ignored for teachers.</span>
           </div>
         </div>
+        <div class="field" data-teacher-subjects>
+          <span class="field-label">Subjects</span>
+          <div class="check-grid">
+            ${availableSubjects().map(subject => `
+              <label class="check-item">${checkbox(subject.id, false)} <span><strong>${esc(subject.name)}</strong></span></label>
+            `).join("") || `<p class="form-note">Create a subject first.</p>`}
+          </div>
+          <span class="field-hint">Choose one or more subjects for teacher accounts.</span>
+        </div>
         <p class="form-note">Usernames may use letters, numbers, dots, dashes and underscores. For students, this is usually their index number.</p>
         <p class="form-error" data-form-error role="alert"></p>
         <div class="modal-actions modal-actions-flat">
@@ -1727,7 +1978,7 @@ function openRenameClass(classId) {
         <h2 id="modal-title">Rename class</h2>
         <p>${esc(target.name)}</p>
       </div>
-      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Ã—</button>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
     </div>
     <div class="modal-body">
       <form class="form" data-form="rename-class">
@@ -1779,9 +2030,9 @@ function openMoveUser(userId) {
     <div class="modal-head">
       <div>
         <h2 id="modal-title">Move student</h2>
-        <p>${esc(target.name)} Â· currently ${esc(target.className || "unassigned")}</p>
+        <p>${esc(target.name)} · currently ${esc(target.className || "unassigned")}</p>
       </div>
-      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">Ã—</button>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
     </div>
     <div class="modal-body">
       <form class="form" data-form="move-user">
@@ -1789,6 +2040,119 @@ function openMoveUser(userId) {
         <div class="field">
           <label for="move-class">Class</label>
           <select id="move-class" name="classId" required>
+            ${state.data.classes.map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
+          </select>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Move student</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openCreateSubject() {
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Add a subject</h2>
+        <p>Subjects keep question banks separate.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="create-subject">
+        <div class="field">
+          <label for="subject-name">Subject name</label>
+          <input id="subject-name" name="name" type="text" maxlength="80" required placeholder="e.g. Mathematics">
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add subject</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openRenameSubject(subjectId) {
+  const target = availableSubjects().find(subject => Number(subject.id) === Number(subjectId));
+  if (!target) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Rename subject</h2>
+        <p>Existing questions and quizzes keep their subject ID.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="rename-subject">
+        <input type="hidden" name="id" value="${target.id}">
+        <div class="field">
+          <label for="subject-name">Subject name</label>
+          <input id="subject-name" name="name" type="text" maxlength="80" value="${esc(target.name)}" required>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save name</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openAssignSubjects(userId) {
+  const target = state.data.users.find(user => Number(user.id) === Number(userId));
+  if (!target) return;
+  const assigned = (target.subjectIds || []).map(Number);
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Assign subjects</h2>
+        <p>${esc(target.name)} · ${esc(target.username)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="assign-subjects">
+        <input type="hidden" name="id" value="${target.id}">
+        <div class="field">
+          <span class="field-label">Subjects this teacher can manage</span>
+          <div class="check-grid">
+            ${availableSubjects().map(subject => `
+              <label class="check-item">${checkbox(subject.id, assigned.includes(Number(subject.id)))}
+                <span><strong>${esc(subject.name)}</strong></span>
+              </label>`).join("")}
+          </div>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save subjects</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openMoveStudent(studentId) {
+  const target = (state.data.students || []).find(student => Number(student.id) === Number(studentId));
+  if (!target) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Move student</h2>
+        <p>${esc(target.name)} · currently ${esc(target.className || "unassigned")}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="move-student">
+        <input type="hidden" name="id" value="${target.id}">
+        <div class="field">
+          <label for="student-move-class">Class</label>
+          <select id="student-move-class" name="classId" required>
             ${state.data.classes.map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
           </select>
         </div>
@@ -1841,7 +2205,7 @@ async function runAction(button) {
       downloadImportCredentials();
       return;
     case "toggle-all-questions": {
-      const boxes = [...document.querySelectorAll('form[data-form="create-quiz"] input[name="questionIds"]')];
+      const boxes = [...document.querySelectorAll('form[data-form="create-quiz"] .check-group:not([hidden]) input[name="questionIds"]')];
       if (!boxes.length) return;
       const selectAll = !boxes.every(box => box.checked);
       boxes.forEach(box => {
@@ -1859,6 +2223,43 @@ async function runAction(button) {
     case "open-move-user":
       openMoveUser(id);
       return;
+    case "open-create-subject":
+      openCreateSubject();
+      return;
+    case "open-rename-subject":
+      openRenameSubject(id);
+      return;
+    case "open-assign-subjects":
+      openAssignSubjects(id);
+      return;
+    case "open-move-student":
+      openMoveStudent(id);
+      return;
+    case "delete-subject": {
+      const target = availableSubjects().find(subject => Number(subject.id) === Number(id));
+      if (!target) return;
+      if (!window.confirm(`Delete the subject "${target.name}"? Subjects with questions or quizzes cannot be deleted.`)) return;
+      await api(`/admin/subjects/${id}`, { method: "DELETE" });
+      await refresh();
+      toast("Subject deleted.", "success");
+      return;
+    }
+    case "approve-quiz":
+    case "unapprove-quiz": {
+      const approved = action === "approve-quiz";
+      await api(`/admin/quizzes/${id}`, { method: "PATCH", body: { approved } });
+      await refresh();
+      toast(approved ? "Quiz approved." : "Quiz returned to the teacher.", "success");
+      return;
+    }
+    case "admin-toggle-quiz": {
+      const target = (d.quizzes || []).find(quiz => Number(quiz.id) === Number(id));
+      if (!target) return;
+      await api(`/admin/quizzes/${id}`, { method: "PATCH", body: { isOpen: !target.isOpen } });
+      await refresh();
+      toast(`Quiz ${target.isOpen ? "closed" : "opened"}.`, "success");
+      return;
+    }
     case "delete-class": {
       const target = d.classes.find(cls => cls.id === id);
       if (!target) return;
@@ -2024,7 +2425,7 @@ async function runForm(form, task) {
   clearFormError(form);
   if (button) {
     button.disabled = true;
-    button.textContent = "Workingâ€¦";
+    button.textContent = "Working…";
   }
   try {
     await task();
@@ -2137,6 +2538,10 @@ async function handleSubmit(form) {
         const classId = Number(data.get("classId"));
         if (!classId) throw new Error("Select a class for the student.");
         body.classId = classId;
+      } else {
+        const subjectIds = data.getAll("subjectIds").map(value => Number(value));
+        if (!subjectIds.length) throw new Error("Assign at least one subject to the teacher.");
+        body.subjectIds = subjectIds;
       }
       const result = await api("/admin/users", { method: "POST", body });
       closeModal();
@@ -2174,12 +2579,83 @@ async function handleSubmit(form) {
     return;
   }
 
+  if (formType === "create-subject") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      await api("/admin/subjects", {
+        method: "POST",
+        body: { name: String(data.get("name") || "").trim() }
+      });
+      closeModal();
+      await refresh();
+      toast("Subject added.", "success");
+    });
+    return;
+  }
+
+  if (formType === "rename-subject") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      await api(`/admin/subjects/${Number(data.get("id"))}`, {
+        method: "PATCH",
+        body: { name: String(data.get("name") || "").trim() }
+      });
+      closeModal();
+      await refresh();
+      toast("Subject renamed.", "success");
+    });
+    return;
+  }
+
+  if (formType === "assign-subjects") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const subjectIds = data.getAll("subjectIds").map(value => Number(value));
+      if (!subjectIds.length) throw new Error("Assign at least one subject.");
+      await api(`/admin/users/${Number(data.get("id"))}`, {
+        method: "PATCH",
+        body: { subjectIds }
+      });
+      closeModal();
+      await refresh();
+      toast("Teacher subjects updated.", "success");
+    });
+    return;
+  }
+
+  if (formType === "move-student") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const classId = Number(data.get("classId"));
+      if (!classId) throw new Error("Select a class.");
+      await api(`/teacher/students/${Number(data.get("id"))}`, {
+        method: "PATCH",
+        body: { classId }
+      });
+      closeModal();
+      await refresh();
+      toast("Student moved.", "success");
+    });
+    return;
+  }
+
   if (formType === "settings") {
     await runForm(form, async () => {
       const data = new FormData(form);
       await api("/admin/settings", {
         method: "PUT",
-        body: { defaultQuizMinutes: Number(data.get("defaultQuizMinutes")) }
+        body: {
+          defaultQuizMinutes: Number(data.get("defaultQuizMinutes")),
+          minQuizMinutes: Number(data.get("minQuizMinutes")),
+          maxQuizMinutes: Number(data.get("maxQuizMinutes")),
+          minQuestions: Number(data.get("minQuestions")),
+          maxQuestions: Number(data.get("maxQuestions")),
+          passMark: Number(data.get("passMark")),
+          maxAttempts: Number(data.get("maxAttempts")),
+          requireApproval: data.has("requireApproval"),
+          showSolutions: data.has("showSolutions"),
+          allowRetakes: data.has("allowRetakes")
+        }
       });
       await refresh();
       toast("Settings saved.", "success");
@@ -2193,7 +2669,7 @@ async function handleSubmit(form) {
       const options = [0, 1, 2, 3].map(index => String(data.get(`option${index}`) || "").trim());
       const body = {
         questionText: String(data.get("questionText") || "").trim(),
-        subject: String(data.get("subject") || "").trim(),
+        subjectId: Number(data.get("subjectId")),
         options,
         correctIndex: Number(data.get("correctIndex")),
         solution: String(data.get("solution") || "").trim()
@@ -2215,13 +2691,16 @@ async function handleSubmit(form) {
         body: {
           title: String(data.get("title") || "").trim(),
           classId: Number(data.get("classId")),
+          subjectId: Number(data.get("subjectId")),
           minutes: Number(data.get("minutes")),
           shuffleQuestions: Boolean(data.get("shuffleQuestions")),
           questionIds
         }
       });
       await refresh();
-      toast("Quiz created and opened.", "success");
+      toast(state.data.settings.requireApproval
+        ? "Quiz created and sent for approval."
+        : "Quiz created and opened.", "success");
     });
     return;
   }
@@ -2252,6 +2731,12 @@ document.addEventListener("click", async event => {
   } catch (error) {
     toast(error.message, "error");
   }
+});
+
+document.addEventListener("change", event => {
+  const select = event.target.closest('select[name="subjectId"], select[name="role"]');
+  if (!select) return;
+  applyFormVisibility();
 });
 
 document.addEventListener("submit", async event => {

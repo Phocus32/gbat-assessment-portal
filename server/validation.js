@@ -41,11 +41,22 @@ const classCreateSchema = z.object({
 
 const classUpdateSchema = classCreateSchema;
 
+const subjectCreateSchema = z.object({
+  name: z.string().trim().min(2, "Subject name must be at least 2 characters.").max(80, "Subject name is too long.")
+});
+
+const subjectUpdateSchema = subjectCreateSchema;
+
+const subjectIdsSchema = z
+  .array(z.coerce.number().int().positive())
+  .max(40, "Too many subjects selected.");
+
 const userCreateSchema = z.object({
   name: nameSchema,
   username: usernameSchema,
   role: z.enum(["student", "teacher"]),
-  classId: z.coerce.number().int().positive().nullable().optional()
+  classId: z.coerce.number().int().positive().nullable().optional(),
+  subjectIds: subjectIdsSchema.optional()
 }).superRefine((value, ctx) => {
   if (value.role === "student" && !value.classId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["classId"], message: "Select a class for the student." });
@@ -55,12 +66,13 @@ const userCreateSchema = z.object({
 const userUpdateSchema = z.object({
   name: nameSchema.optional(),
   active: z.boolean().optional(),
-  classId: z.coerce.number().int().positive().nullable().optional()
+  classId: z.coerce.number().int().positive().nullable().optional(),
+  subjectIds: subjectIdsSchema.optional()
 });
 
 const questionCreateSchema = z.object({
   questionText: z.string().trim().min(5, "Question text is too short.").max(4000, "Question text is too long."),
-  subject: z.string().trim().min(2, "Subject must be at least 2 characters.").max(120, "Subject is too long.").default("General"),
+  subjectId: z.coerce.number().int().positive("Choose a subject."),
   options: z.array(z.string().trim().min(1, "Options cannot be empty.").max(500, "Option is too long.")).length(4, "Four options are required."),
   correctIndex: z.coerce.number().int().min(0).max(3),
   solution: z.string().trim().min(5, "Worked solution is too short.").max(8000, "Worked solution is too long.")
@@ -69,6 +81,7 @@ const questionCreateSchema = z.object({
 const quizCreateSchema = z.object({
   title: z.string().trim().min(3, "Quiz title must be at least 3 characters.").max(160, "Quiz title is too long."),
   classId: z.coerce.number().int().positive("Select a class."),
+  subjectId: z.coerce.number().int().positive("Choose a subject."),
   minutes: z.coerce.number().int().min(1, "Duration must be at least 1 minute.").max(240, "Duration cannot exceed 240 minutes."),
   shuffleQuestions: z.boolean().default(false),
   questionIds: z
@@ -85,6 +98,17 @@ const quizUpdateSchema = z.object({
   message: "No changes were supplied."
 });
 
+const adminQuizUpdateSchema = z.object({
+  approved: z.boolean().optional(),
+  isOpen: z.boolean().optional()
+}).refine(value => value.approved !== undefined || value.isOpen !== undefined, {
+  message: "No changes were supplied."
+});
+
+const teacherStudentUpdateSchema = z.object({
+  classId: z.coerce.number().int().positive("Select a class.")
+});
+
 const startAttemptSchema = z.object({
   mode: z.enum(["Practice", "Exam"])
 });
@@ -99,7 +123,27 @@ const announcementCreateSchema = z.object({
 });
 
 const settingsSchema = z.object({
-  defaultQuizMinutes: z.coerce.number().int().min(1).max(240)
+  defaultQuizMinutes: z.coerce.number().int().min(1).max(240),
+  minQuizMinutes: z.coerce.number().int().min(1).max(240),
+  maxQuizMinutes: z.coerce.number().int().min(1).max(240),
+  minQuestions: z.coerce.number().int().min(1).max(200),
+  maxQuestions: z.coerce.number().int().min(1).max(200),
+  passMark: z.coerce.number().int().min(1).max(100),
+  maxAttempts: z.coerce.number().int().min(0).max(50),
+  requireApproval: z.boolean(),
+  showSolutions: z.boolean(),
+  allowRetakes: z.boolean()
+}).refine(value => value.minQuizMinutes <= value.maxQuizMinutes, {
+  message: "The minimum duration cannot exceed the maximum duration.",
+  path: ["minQuizMinutes"]
+}).refine(value => value.minQuestions <= value.maxQuestions, {
+  message: "The minimum question count cannot exceed the maximum.",
+  path: ["minQuestions"]
+}).refine(value =>
+  value.defaultQuizMinutes >= value.minQuizMinutes && value.defaultQuizMinutes <= value.maxQuizMinutes,
+{
+  message: "The default duration must be between the minimum and maximum.",
+  path: ["defaultQuizMinutes"]
 });
 
 module.exports = {
@@ -111,11 +155,15 @@ module.exports = {
   changePasswordSchema,
   classCreateSchema,
   classUpdateSchema,
+  subjectCreateSchema,
+  subjectUpdateSchema,
   userCreateSchema,
   userUpdateSchema,
   questionCreateSchema,
   quizCreateSchema,
   quizUpdateSchema,
+  adminQuizUpdateSchema,
+  teacherStudentUpdateSchema,
   startAttemptSchema,
   answerSchema,
   announcementCreateSchema,

@@ -3,6 +3,7 @@
 const express = require("express");
 const { getDocById, listQuizItems } = require("../fdb");
 const { asyncHandler, parseOptions } = require("../utils");
+const { getSettings } = require("../settings");
 const { idSchema } = require("../validation");
 
 const router = express.Router();
@@ -29,8 +30,12 @@ router.get("/:id", asyncHandler(async (req, res) => {
     return res.status(403).json({ error: "You do not have access to this submission." });
   }
 
-  const items = await listQuizItems(submission.quiz_id);
+  const [items, settings] = await Promise.all([
+    listQuizItems(submission.quiz_id),
+    getSettings()
+  ]);
   const itemMap = new Map(items.map(item => [Number(item.position), item]));
+  const hideAnswers = role === "student" && !settings.showSolutions;
 
   return res.json({
     submission: {
@@ -57,11 +62,15 @@ router.get("/:id", asyncHandler(async (req, res) => {
             chosenIndex: answer.chosen_index === null || answer.chosen_index === undefined
               ? null
               : Number(answer.chosen_index),
-            correctIndex: Number(answer.correct_index),
-            solution: item.solution || "",
+            ...(hideAnswers
+              ? {}
+              : {
+                correctIndex: Number(answer.correct_index),
+                solution: item.solution || "",
+                isCorrect: Boolean(answer.is_correct)
+              }),
             subject: item.subject || "General",
-            diagramSvg: item.diagram_svg || null,
-            isCorrect: Boolean(answer.is_correct)
+            diagramSvg: item.diagram_svg || null
           };
         })
     }

@@ -871,7 +871,8 @@ tbody tr:hover {
   flex: 1 1 14rem;
 }
 
-.checkbox-grid {
+.checkbox-grid,
+.check-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 0.5rem;
@@ -1196,6 +1197,11 @@ tbody tr:hover {
 .option-line.wrong {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.option-line.selected {
+  color: var(--brand-strong);
+  background: var(--brand-soft);
 }
 
 .solution-box {
@@ -1920,4 +1926,153 @@ progress::-moz-progress-bar {
   max-width: 100%;
   height: auto;
   margin: 0 auto;
+}
+
+/* Phone-first controls: 44px targets and 16px fields avoid iOS zoom. */
+
+@media (max-width: 900px) {
+  .field input,
+  .field select,
+  .field textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .btn,
+  .btn-sm,
+  .nav-btn,
+  .icon-btn,
+  .link-btn,
+  .password-toggle,
+  .palette-btn,
+  .option-btn {
+    min-height: 44px;
+  }
+
+  .nav-btn {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .icon-btn,
+  .palette-btn {
+    min-width: 44px;
+  }
+
+  .check-item {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  .table-wrap {
+    overflow: visible;
+  }
+
+  table,
+  tbody,
+  tbody tr,
+  td {
+    display: block;
+    width: 100%;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody tr {
+    margin-bottom: 0.7rem;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+
+  tbody tr:hover {
+    background: var(--surface);
+  }
+
+  td {
+    padding: 0.55rem 0.15rem;
+    border-bottom: 1px solid var(--line);
+    text-align: right;
+  }
+
+  td:last-child {
+    border-bottom: 0;
+  }
+
+  td[data-label] {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.85rem;
+  }
+
+  td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 34%;
+    padding-top: 0.1rem;
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .row-actions {
+    justify-content: flex-end;
+  }
+
+  .cell-sub {
+    text-align: right;
+  }
+}
+
+/* Fewer expensive effects on small/low-power devices. */
+
+@media (max-width: 620px) {
+  body {
+    background: var(--bg);
+  }
+
+  .auth-card,
+  .topbar,
+  .runner-head {
+    background: #ffffff;
+    backdrop-filter: none;
+  }
+
+  .auth-card,
+  .panel,
+  .stat-card,
+  .quiz-card,
+  .question-card,
+  .palette,
+  .modal-content,
+  .toast {
+    box-shadow: none;
+  }
+
+  .modal::backdrop {
+    backdrop-filter: none;
+  }
+
+  .toast,
+  .timer-value.urgent {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

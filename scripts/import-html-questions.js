@@ -13,6 +13,7 @@ const {
   close
 } = require("../server/fdb");
 const { hashPassword } = require("../server/security");
+const { ensureSubject, subjectIdsOf } = require("../server/subjects");
 const { sanitizeSvg } = require("../server/svg");
 const { generateTemporaryPassword, logActivity } = require("../server/utils");
 
@@ -144,6 +145,15 @@ async function importQuestions(teacherId, questions, options) {
   let updated = 0;
   let unchanged = 0;
 
+  const subjectIdByName = new Map();
+  for (const question of questions) {
+    const name = String(question.subject || "General").trim() || "General";
+    if (!subjectIdByName.has(name)) subjectIdByName.set(name, await ensureSubject(name));
+  }
+  const subjectIdFor = question => subjectIdByName.get(
+    String(question.subject || "General").trim() || "General"
+  );
+
   const existing = await listWhere("questions", "created_by", teacherId);
   const byText = new Map(existing.map(question => [question.question_text, question]));
 
@@ -158,6 +168,7 @@ async function importQuestions(teacherId, questions, options) {
         correct_index: question.correctIndex,
         solution: question.solution,
         subject: question.subject,
+        subject_id: subjectIdFor(question),
         diagram_svg: question.diagramSvg,
         created_by: teacherId,
         created_at: new Date(),
@@ -165,7 +176,7 @@ async function importQuestions(teacherId, questions, options) {
       });
       inserted += 1;
     }
-    return { inserted, updated, unchanged };
+    return { inserted, updated, unchanged, subjectIds: [...subjectIdByName.values()] };
   }
 
   for (const question of questions) {
@@ -178,6 +189,7 @@ async function importQuestions(teacherId, questions, options) {
         correct_index: question.correctIndex,
         solution: question.solution,
         subject: question.subject,
+        subject_id: subjectIdFor(question),
         diagram_svg: question.diagramSvg,
         created_by: teacherId,
         created_at: new Date(),
@@ -205,13 +217,14 @@ async function importQuestions(teacherId, questions, options) {
       correct_index: question.correctIndex,
       solution: question.solution,
       subject: question.subject,
+      subject_id: subjectIdFor(question),
       diagram_svg: question.diagramSvg,
       updated_at: new Date()
     });
     updated += 1;
   }
 
-  return { inserted, updated, unchanged };
+  return { inserted, updated, unchanged, subjectIds: [...subjectIdByName.values()] };
 }
 
 async function main(cliOptions, { quiet = false } = {}) {
@@ -228,6 +241,13 @@ async function main(cliOptions, { quiet = false } = {}) {
 
   const user = await findOrCreateTeacher(options);
   const result = await importQuestions(user.teacher.id, questions, options);
+
+  const subjectIds = [...new Set([
+    ...subjectIdsOf(user.teacher),
+    ...(result.subjectIds || []).map(Number)
+  ])];
+  await updateDocById("users", user.teacher.id, { subject_ids: subjectIds });
+  user.teacher.subject_ids = subjectIds;
 
   await logActivity(
     null,

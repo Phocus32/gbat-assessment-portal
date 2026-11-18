@@ -14,11 +14,21 @@ const {
   deleteClass,
   findUserByUsername,
   createUser,
+  getManyByIds,
   deleteUser,
-  recentDocs,
-  getSetting,
-  setSetting
+  countQuizItems,
+  recentDocs
 } = require("../fdb");
+const {
+  createSubject,
+  renameSubject,
+  deleteSubject,
+  listSubjects,
+  ensureSubject,
+  subjectIdsOf,
+  subjectMap
+} = require("../subjects");
+const { getSettings, saveSettings } = require("../settings");
 const { hashPassword } = require("../security");
 const { buildStudentTemplate } = require("../excel");
 const { importStudentsFromWorkbook, ExcelInputError } = require("../student-import");
@@ -34,7 +44,10 @@ const {
   classUpdateSchema,
   userCreateSchema,
   userUpdateSchema,
-  settingsSchema
+  subjectCreateSchema,
+  subjectUpdateSchema,
+  settingsSchema,
+  adminQuizUpdateSchema
 } = require("../validation");
 
 const router = express.Router();
@@ -46,11 +59,16 @@ const uploadExcel = multer({
 
 const ROLE_ORDER = { admin: 1, teacher: 2, student: 3 };
 
-function attachClassName(user, classMap) {
+function attachClassName(user, classMap, subjectNamesMap = new Map()) {
   const className = user.class_id === null || user.class_id === undefined
     ? null
     : (classMap.get(Number(user.class_id)) || null);
-  return publicUser({ ...user, class_name: className });
+  const subjectIds = subjectIdsOf(user);
+  return {
+    ...publicUser({ ...user, class_name: className }),
+    subjectIds,
+    subjectNames: subjectIds.map(id => subjectNamesMap.get(id)).filter(Boolean)
+  };
 }
 
 router.get("/students/template.xlsx", asyncHandler(async (req, res) => {
@@ -71,16 +89,21 @@ router.post("/students/import", uploadExcel.single("file"), asyncHandler(async (
 }));
 
 router.get("/bootstrap", asyncHandler(async (req, res) => {
-  const [users, classes, logs, defaultMinutes, submissions, quizzes] = await Promise.all([
+  const [users, classes, logs, settings, submissions, quizzes, subjects] = await Promise.all([
     listAll("users"),
     listClasses(),
-    recentDocs("activity_logs", 100),
-    getSetting("default_quiz_minutes"),
+    recentDocs("activity_logs", 50),
+    getSettings(),
     listAll("submissions"),
-    listAll("quizzes")
+    listAll("quizzes"),
+    listSubjects()
   ]);
 
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+  const subjectNames = new Map(subjects.map(subject => [Number(subject.id), subject.name]));
+  const teacherNames = new Map(
+    users.filter(user => user.role === "teacher").map(user => [Number(user.id), user.name])
+  );
 
   const studentsByClass = new Map();
   for (const user of users) {
@@ -90,11 +113,13 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
   }
   const quizzesByClass = new Map();
   let openQuizzes = 0;
+  let pendingApproval = 0;
   for (const quiz of quizzes) {
     if (quiz.is_deleted) continue;
     const key = Number(quiz.class_id);
     quizzesByClass.set(key, (quizzesByClass.get(key) || 0) + 1);
     if (quiz.is_open) openQuizzes += 1;
+    if (quiz.approved === false) pendingApproval += 1;
   }
 
   const sortedUsers = [...users].sort((a, b) => {
@@ -102,12 +127,17 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     return roleDiff || a.name.localeCompare(b.name);
   });
 
+  const liveQuizzes = quizzes
+    .filter(quiz => !quiz.is_deleted)
+    .sort((a, b) => Number(b.id) - Number(a.id));
+  const questionCounts = await Promise.all(liveQuizzes.map(quiz => countQuizItems(quiz.id)));
+
   const average = submissions.length
     ? Math.round(submissions.reduce((sum, row) => sum + Number(row.pct || 0), 0) / submissions.length)
     : 0;
 
   res.json({
-    users: sortedUsers.map(user => attachClassName(user, classMap)),
+    users: sortedUsers.map(user => attachClassName(user, classMap, subjectNames)),
     classes: classes.map(cls => ({
       id: cls.id,
       name: cls.name,
@@ -115,19 +145,35 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       quizCount: quizzesByClass.get(Number(cls.id)) || 0,
       createdAt: cls.created_at
     })),
+    subjects,
+    quizzes: liveQuizzes.map((quiz, index) => ({
+      id: quiz.id,
+      title: quiz.title,
+      classId: quiz.class_id,
+      className: classMap.get(Number(quiz.class_id)) || null,
+      teacherName: teacherNames.get(Number(quiz.teacher_id)) || "Unknown",
+      subjectId: quiz.subject_id || null,
+      subjectName: subjectNames.get(Number(quiz.subject_id)) || quiz.subject || "General",
+      minutes: Number(quiz.minutes),
+      questionCount: questionCounts[index],
+      isOpen: quiz.is_open === true || quiz.is_open === 1,
+      approved: quiz.approved !== false,
+      createdAt: quiz.created_at
+    })),
     logs: logs.map(log => ({
       id: log.id,
       actorName: log.actor_name,
       action: log.action,
       createdAt: log.created_at
     })),
-    settings: { defaultQuizMinutes: Number(defaultMinutes || 45) },
+    settings,
     stats: {
       students: users.filter(user => user.role === "student").length,
       teachers: users.filter(user => user.role === "teacher").length,
       classes: classes.length,
       average,
-      openQuizzes
+      openQuizzes,
+      pendingApproval
     }
   });
 }));
@@ -183,6 +229,82 @@ router.delete("/classes/:id", asyncHandler(async (req, res) => {
   return res.json({ ok: true });
 }));
 
+router.get("/subjects", asyncHandler(async (req, res) => {
+  res.json({ subjects: await listSubjects() });
+}));
+
+router.post("/subjects", asyncHandler(async (req, res) => {
+  const input = subjectCreateSchema.parse(req.body);
+  const id = await createSubject(input.name);
+  await logActivity(req.user, `Created subject ${input.name}`);
+  return res.status(201).json({ subject: { id, name: input.name } });
+}));
+
+router.patch("/subjects/:id", asyncHandler(async (req, res) => {
+  const subjectId = idSchema.parse(req.params.id);
+  const input = subjectUpdateSchema.parse(req.body);
+  const target = await getDocById("subjects", subjectId);
+  if (!target) return res.status(404).json({ error: "Subject not found." });
+  await renameSubject(subjectId, input.name);
+  await logActivity(req.user, `Renamed subject "${target.name}" to "${input.name}"`);
+  return res.json({ subject: { id: subjectId, name: input.name } });
+}));
+
+router.delete("/subjects/:id", asyncHandler(async (req, res) => {
+  const subjectId = idSchema.parse(req.params.id);
+  const target = await getDocById("subjects", subjectId);
+  if (!target) return res.status(404).json({ error: "Subject not found." });
+
+  const [questions, quizzes] = await Promise.all([
+    listWhere("questions", "subject_id", subjectId),
+    listWhere("quizzes", "subject_id", subjectId)
+  ]);
+  if (questions.length || quizzes.length) {
+    return res.status(409).json({
+      error: `Cannot delete "${target.name}": it still has ${questions.length} question(s) and ${quizzes.length} quiz(zes). Rename it instead, or move that content first.`
+    });
+  }
+
+  const teachers = await listWhere("users", "subject_ids", subjectId);
+  for (const teacher of teachers) {
+    const remaining = subjectIdsOf(teacher).filter(id => id !== Number(subjectId));
+    await updateDocById("users", teacher.id, { subject_ids: remaining });
+  }
+
+  await deleteSubject(subjectId);
+  await logActivity(req.user, `Deleted subject ${target.name}`);
+  return res.json({ ok: true });
+}));
+
+router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
+  const quizId = idSchema.parse(req.params.id);
+  const input = adminQuizUpdateSchema.parse(req.body);
+  const quiz = await getDocById("quizzes", quizId);
+  if (!quiz || quiz.is_deleted) return res.status(404).json({ error: "Quiz not found." });
+
+  const patch = {};
+  const actions = [];
+  if (input.approved !== undefined) {
+    patch.approved = Boolean(input.approved);
+    actions.push(`${input.approved ? "Approved" : "Returned"} quiz "${quiz.title}"`);
+  }
+  if (input.isOpen !== undefined) {
+    patch.is_open = Boolean(input.isOpen);
+    actions.push(`${input.isOpen ? "Opened" : "Closed"} quiz "${quiz.title}"`);
+  }
+
+  await updateDocById("quizzes", quizId, patch);
+  for (const action of actions) await logActivity(req.user, action);
+  return res.json({
+    quiz: {
+      id: quiz.id,
+      title: quiz.title,
+      approved: patch.approved === undefined ? quiz.approved !== false : patch.approved,
+      isOpen: patch.isOpen === undefined ? quiz.is_open === true || quiz.is_open === 1 : patch.isOpen
+    }
+  });
+}));
+
 router.post("/users", asyncHandler(async (req, res) => {
   const input = userCreateSchema.parse(req.body);
 
@@ -197,6 +319,19 @@ router.post("/users", asyncHandler(async (req, res) => {
     classId = cls.id;
   }
 
+  let subjectIds = [];
+  if (input.role === "teacher") {
+    const generalId = await ensureSubject("General");
+    const requested = input.subjectIds && input.subjectIds.length
+      ? [...new Set(input.subjectIds.map(Number))]
+      : [generalId];
+    const valid = await getManyByIds("subjects", requested);
+    if (valid.length !== requested.length) {
+      return res.status(400).json({ error: "One or more selected subjects no longer exist." });
+    }
+    subjectIds = requested;
+  }
+
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
 
@@ -206,6 +341,7 @@ router.post("/users", asyncHandler(async (req, res) => {
     password_hash: passwordHash,
     role: input.role,
     class_id: classId,
+    subject_ids: subjectIds,
     active: true,
     must_change_password: true,
     failed_login_attempts: 0,
@@ -217,10 +353,15 @@ router.post("/users", asyncHandler(async (req, res) => {
 
   const created = await getDocById("users", userId);
   const className = classId === null ? null : (await getDocById("classes", classId)).name;
+  const names = await subjectMap();
 
   await logActivity(req.user, `Created ${input.role} account "${input.name}" (${input.username})`);
   return res.status(201).json({
-    user: publicUser({ ...created, class_name: className }),
+    user: {
+      ...publicUser({ ...created, class_name: className }),
+      subjectIds: subjectIds,
+      subjectNames: subjectIds.map(id => names.get(id)).filter(Boolean)
+    },
     temporaryPassword
   });
 }));
@@ -246,6 +387,25 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
   if (input.name !== undefined && input.name !== target.name) {
     patch.name = input.name;
     actions.push(`Renamed ${target.name} to ${input.name}`);
+  }
+
+  let subjectNames = null;
+  if (input.subjectIds !== undefined) {
+    if (target.role !== "teacher") {
+      return res.status(400).json({ error: "Only teacher accounts can be assigned subjects." });
+    }
+    const requested = [...new Set(input.subjectIds.map(Number))];
+    if (!requested.length) {
+      return res.status(400).json({ error: "Assign at least one subject to the teacher." });
+    }
+    const valid = await getManyByIds("subjects", requested);
+    if (valid.length !== requested.length) {
+      return res.status(400).json({ error: "One or more selected subjects no longer exist." });
+    }
+    patch.subject_ids = requested;
+    const names = await subjectMap();
+    subjectNames = requested.map(id => names.get(id)).filter(Boolean);
+    actions.push(`Set subjects for ${target.name} to ${subjectNames.join(", ")}`);
   }
 
   if (typeof input.active === "boolean") {
@@ -287,7 +447,17 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
       : await getDocById("classes", updated.class_id);
     className = cls ? cls.name : null;
   }
-  return res.json({ user: publicUser({ ...updated, class_name: className }) });
+  if (subjectNames === null) {
+    const names = await subjectMap();
+    subjectNames = subjectIdsOf(updated).map(id => names.get(id)).filter(Boolean);
+  }
+  return res.json({
+    user: {
+      ...publicUser({ ...updated, class_name: className }),
+      subjectIds: subjectIdsOf(updated),
+      subjectNames
+    }
+  });
 }));
 
 router.post("/users/:id/reset-password", asyncHandler(async (req, res) => {
@@ -342,10 +512,11 @@ router.delete("/users/:id", asyncHandler(async (req, res) => {
 }));
 
 router.put("/settings", asyncHandler(async (req, res) => {
-  const input = settingsSchema.parse(req.body);
-  await setSetting("default_quiz_minutes", String(input.defaultQuizMinutes));
-  await logActivity(req.user, `Updated default quiz duration to ${input.defaultQuizMinutes} minutes`);
-  return res.json({ settings: input });
+  const current = await getSettings();
+  const input = settingsSchema.parse({ ...current, ...req.body });
+  await saveSettings(input);
+  await logActivity(req.user, "Updated quiz and assessment settings");
+  return res.json({ settings: await getSettings() });
 }));
 
 module.exports = router;

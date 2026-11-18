@@ -1,6 +1,9 @@
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
+const compression = require("compression");
 const express = require("express");
 const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
@@ -19,6 +22,25 @@ const app = express();
 
 app.disable("x-powered-by");
 app.set("trust proxy", config.trustProxy);
+
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const ASSET_FILES = ["app.js", "styles.css", "favicon.svg"];
+
+// The HTML is never cached; the asset query string is a content hash so a new
+// deploy always fetches fresh CSS/JS while repeat visits reuse immutable files.
+const ASSET_VERSION = (() => {
+  const hash = crypto.createHash("sha256");
+  for (const file of ASSET_FILES) {
+    hash.update(file);
+    hash.update(fs.readFileSync(path.join(PUBLIC_DIR, file)));
+  }
+  return hash.digest("hex").slice(0, 12);
+})();
+const INDEX_HTML = fs
+  .readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8")
+  .replace(/__ASSET_VERSION__/g, ASSET_VERSION);
+
+app.use(compression({ threshold: 1024 }));
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -93,10 +115,29 @@ app.use("/api/teacher", authenticate, requirePasswordChanged, requireRole("teach
 app.use("/api/student", authenticate, requirePasswordChanged, requireRole("student"), studentRouter);
 app.use("/api/submissions", authenticate, requirePasswordChanged, submissionsRouter);
 
-app.use(express.static(path.join(__dirname, "..", "public"), {
-  index: "index.html",
+app.get(["/", "/index.html"], (req, res) => {
+  res.type("html")
+    .set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+    .send(INDEX_HTML);
+});
+
+app.use(express.static(PUBLIC_DIR, {
+  index: false,
   etag: true,
-  maxAge: 0
+  maxAge: 0,
+  setHeaders(res, filePath) {
+    const version = res.req && res.req.query ? res.req.query.v : null;
+    const isVersioned = typeof version === "string"
+      && /^[a-f0-9]{12}$/.test(version)
+      && version === ASSET_VERSION;
+    if (isVersioned) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    } else if (path.extname(filePath) === ".html") {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    } else {
+      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    }
+  }
 }));
 
 app.use("/api", (req, res) => {

@@ -11,10 +11,13 @@ const {
   createClass,
   createUser,
   createQuizWithItems,
+  getDocById,
   insertDoc,
+  updateDocById,
   close
 } = require("../server/fdb");
 const { hashPassword } = require("../server/security");
+const { ensureSubject, subjectIdsOf } = require("../server/subjects");
 const { generateTemporaryPassword, logActivity } = require("../server/utils");
 const { nameSchema, usernameSchema } = require("../server/validation");
 
@@ -134,9 +137,13 @@ async function ensureTeacher(created) {
   return { id, name, username };
 }
 
-async function ensureQuiz(teacher, cls, questions, options, created) {
+async function ensureQuiz(teacher, cls, questions, subject, options, created) {
   const existing = (await listWhere("quizzes", "class_id", cls.id))
-    .filter(quiz => quiz.title === options.quizTitle && !quiz.is_deleted)
+    .filter(quiz =>
+      quiz.title === options.quizTitle &&
+      Number(quiz.subject_id) === Number(subject.id) &&
+      !quiz.is_deleted
+    )
     .sort((a, b) => a.id - b.id)[0];
   if (existing) return existing;
 
@@ -145,10 +152,13 @@ async function ensureQuiz(teacher, cls, questions, options, created) {
       title: options.quizTitle,
       class_id: cls.id,
       teacher_id: teacher.id,
+      subject_id: Number(subject.id),
+      subject: subject.name,
       minutes: options.minutes,
       shuffle_questions: false,
       is_open: true,
       is_deleted: false,
+      approved: true,
       created_at: new Date()
     },
     questions.map(question => ({
@@ -156,7 +166,8 @@ async function ensureQuiz(teacher, cls, questions, options, created) {
       options: question.options,
       correct_index: question.correct_index,
       solution: question.solution,
-      subject: question.subject || "General",
+      subject: subject.name,
+      subject_id: Number(subject.id),
       diagram_svg: question.diagram_svg || null
     }))
   );
@@ -236,8 +247,31 @@ async function main(cliOptions, { quiet = false } = {}) {
     throw new Error("The teacher has no questions. Run `npm run import-html` first.");
   }
 
+  const subjectIds = [];
+  for (const question of questionRows) {
+    const id = question.subject_id || await ensureSubject(question.subject || "General");
+    if (!subjectIds.includes(Number(id))) subjectIds.push(Number(id));
+    if (!question.subject_id) {
+      await updateDocById("questions", question.id, { subject_id: Number(id) });
+    }
+  }
+  await updateDocById("users", teacher.id, {
+    subject_ids: [...new Set([...subjectIdsOf(teacher), ...subjectIds])]
+  });
+  teacher.subject_ids = [...new Set([...subjectIdsOf(teacher), ...subjectIds])];
+
+  const primaryId = subjectIds[0];
+  const primaryDoc = await getDocById("subjects", primaryId);
+  const primary = {
+    id: primaryId,
+    name: primaryDoc ? primaryDoc.name : "General"
+  };
+  const questionsForQuiz = questionRows.filter(question =>
+    Number(question.subject_id || primaryId) === Number(primaryId)
+  );
+
   for (const cls of classes) {
-    await ensureQuiz(teacher, cls, questionRows, options, created);
+    await ensureQuiz(teacher, cls, questionsForQuiz, primary, options, created);
   }
 
   const demo = options.demoStudents ? await ensureDemoStudents(classes, created) : [];

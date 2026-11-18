@@ -19,6 +19,7 @@ const {
   recentDocs
 } = require("../fdb");
 const { asyncHandler, parseOptions, toBoolean, logActivity } = require("../utils");
+const { getSettings } = require("../settings");
 const { idSchema, startAttemptSchema, answerSchema } = require("../validation");
 
 const router = express.Router();
@@ -33,6 +34,11 @@ async function loadQuizForStudent(quizId, user) {
   if (!quiz || quiz.is_deleted) return { error: { status: 404, message: "Quiz not found." } };
   if (Number(quiz.class_id) !== Number(user.class_id)) {
     return { error: { status: 403, message: "This quiz is not assigned to your class." } };
+  }
+  const open = toBoolean(quiz.is_open);
+  const approved = quiz.approved !== false;
+  if (!open || !approved) {
+    return { error: { status: 403, message: "This quiz is not available yet." } };
   }
   const cls = await getDocById("classes", quiz.class_id);
   return { quiz: { ...quiz, class_name: cls ? cls.name : null } };
@@ -90,7 +96,7 @@ function parseQuestionOrder(value, fallback) {
   }
 }
 
-async function buildAttemptPayload(attempt, quiz) {
+async function buildAttemptPayload(attempt, quiz, showSolutions = true) {
   const [questionRows, answerRows] = await Promise.all([
     listQuizItems(quiz.id),
     listAttemptAnswers(attempt.id)
@@ -107,7 +113,7 @@ async function buildAttemptPayload(attempt, quiz) {
   const practice = attempt.mode === "Practice";
   const answers = answerRows.map(answer => {
     const question = questionMap.get(Number(answer.position));
-    if (!practice || !question) {
+    if (!practice || !question || !showSolutions) {
       return { position: answer.position, chosenIndex: answer.chosen_index };
     }
     return {
@@ -151,15 +157,16 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const classId = req.user.class_id;
 
-  const [classQuizzes, announcements, mySubmissions] = await Promise.all([
+  const [classQuizzes, announcements, mySubmissions, settings] = await Promise.all([
     classId === null || classId === undefined ? Promise.resolve([]) : listWhere("quizzes", "class_id", classId),
     recentDocs("announcements", 50),
-    listWhere("submissions", "student_id", studentId)
+    listWhere("submissions", "student_id", studentId),
+    getSettings()
   ]);
 
   const quizzes = classQuizzes
-    .filter(quiz => !quiz.is_deleted)
-    .sort((a, b) => Number(b.is_open) - Number(a.is_open) || Number(b.id) - Number(a.id));
+    .filter(quiz => !quiz.is_deleted && toBoolean(quiz.is_open) && quiz.approved !== false)
+    .sort((a, b) => Number(b.id) - Number(a.id));
 
   const [questionCounts, authorDocs, submissionQuizDocs] = await Promise.all([
     Promise.all(quizzes.map(quiz => countQuizItems(quiz.id))),
@@ -223,11 +230,17 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
       pct: Number(submission.pct),
       submittedAt: submission.submitted_at
     })),
+    settings: {
+      passMark: settings.passMark,
+      showSolutions: settings.showSolutions,
+      maxAttempts: settings.maxAttempts,
+      allowRetakes: settings.allowRetakes
+    },
     stats: {
       quizzesTaken: byQuiz.size,
       average: bestPcts.length ? Math.round(bestPcts.reduce((sum, value) => sum + value, 0) / bestPcts.length) : 0,
-      passed: bestPcts.filter(value => value >= 50).length,
-      available: quizzes.filter(quiz => toBoolean(quiz.is_open)).length
+      passed: bestPcts.filter(value => value >= settings.passMark).length,
+      available: quizzes.length
     }
   });
 }));
@@ -239,6 +252,7 @@ router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {
   const { quiz, error } = await loadQuizForStudent(quizId, req.user);
   if (error) return res.status(error.status).json({ error: error.message });
 
+  const settings = await getSettings();
   await expireStaleExamAttempts(req.user.id, quizId);
 
   let attempt = await findInProgressAttempt(req.user.id, quizId, input.mode);
@@ -247,6 +261,15 @@ router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {
   if (!attempt) {
     if (!toBoolean(quiz.is_open)) {
       return res.status(403).json({ error: "This quiz is closed." });
+    }
+
+    const priorSubmissions = (await listWhere("submissions", "student_id", req.user.id))
+      .filter(submission => Number(submission.quiz_id) === Number(quizId));
+    if (!settings.allowRetakes && priorSubmissions.length > 0) {
+      return res.status(403).json({ error: "Retakes are disabled for this quiz." });
+    }
+    if (settings.maxAttempts > 0 && priorSubmissions.length >= settings.maxAttempts) {
+      return res.status(403).json({ error: `You have reached the limit of ${settings.maxAttempts} attempt(s) for this quiz.` });
     }
 
     const items = await listQuizItems(quizId);
@@ -286,7 +309,7 @@ router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {
     await logActivity(req.user, `Started a ${input.mode.toLowerCase()} attempt for "${quiz.title}"`);
   }
 
-  return res.json(await buildAttemptPayload(attempt, quiz));
+  return res.json(await buildAttemptPayload(attempt, quiz, settings.showSolutions));
 }));
 
 router.get("/attempts/:id", asyncHandler(async (req, res) => {
@@ -319,12 +342,13 @@ router.get("/attempts/:id", asyncHandler(async (req, res) => {
     return res.status(410).json({ error: "Time has expired for this attempt." });
   }
 
+  const settings = await getSettings();
   return res.json(await buildAttemptPayload({ ...attempt, seconds_remaining: remaining }, {
     id: attempt.quiz_id,
     title: quiz ? quiz.title : "",
     minutes: quiz ? quiz.minutes : 0,
     class_name: cls ? cls.name : null
-  }));
+  }, settings.showSolutions));
 }));
 
 router.post("/attempts/:id/answer", asyncHandler(async (req, res) => {
@@ -367,6 +391,8 @@ router.post("/attempts/:id/answer", asyncHandler(async (req, res) => {
   }
 
   if (attempt.mode === "Practice") {
+    const settings = await getSettings();
+    if (!settings.showSolutions) return res.json({ saved: true });
     return res.json({
       saved: true,
       feedback: {

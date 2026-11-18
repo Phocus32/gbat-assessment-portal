@@ -3,8 +3,9 @@
 const fs = require("fs");
 const path = require("path");
 const config = require("./config");
-const { getDb, col, hasAdmin, getSetting, setSetting, listAll } = require("./fdb");
+const { getDb, col, hasAdmin, listAll } = require("./fdb");
 const { logActivity } = require("./utils");
+const { migrateSchema } = require("./subjects");
 
 const importQuestions = require("../scripts/import-html-questions");
 const seedPortal = require("../scripts/seed-portal");
@@ -62,9 +63,7 @@ async function createMinimalAdmin() {
 }
 
 async function ensureDefaultSettings() {
-  if ((await getSetting("default_quiz_minutes")) === null) {
-    await setSetting("default_quiz_minutes", "45");
-  }
+  await migrateSchema();
 }
 
 /**
