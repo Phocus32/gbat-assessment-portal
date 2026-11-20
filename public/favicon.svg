@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Learners Connect">
-  <rect width="64" height="64" rx="14" fill="#1f5c45"/>
-  <path d="M14 16h7v28h16v7H14z" fill="#f4efe4"/>
-  <path d="M51 20c-4-5-12-6-17-2-5 4-6 13-2 19 3 5 10 7 16 3" fill="none" stroke="#f4efe4" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="52" cy="14" r="5" fill="#d9a441"/>
+  <rect width="64" height="64" rx="16" fill="#14543e"/>
+  <path d="M16 20h7v18h7v7H16z" fill="#f7f3e8"/>
+  <path d="M52 24a11 11 0 1 0 0 16" fill="none" stroke="#f7f3e8" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="52" cy="17" r="4" fill="#e2b24b"/>
 </svg>

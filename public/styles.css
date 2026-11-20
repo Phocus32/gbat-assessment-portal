@@ -147,17 +147,12 @@ h4 {
 }
 
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  flex: 0 0 auto;
   width: 2.9rem;
   height: 2.9rem;
   border-radius: 0.9rem;
-  color: #103f30;
-  background: linear-gradient(135deg, #ffe6a7, var(--accent));
-  font-weight: 800;
-  font-size: 1.05rem;
-  letter-spacing: 0.04em;
+  object-fit: contain;
   box-shadow: 0 9px 22px rgba(0, 0, 0, 0.2);
 }
 
@@ -339,11 +334,11 @@ h4 {
   flex: 0 0 auto;
 }
 
-.brand .brand-mark {
+.brand .brand-mark,
+.runner-brand .brand-mark {
   width: 2.35rem;
   height: 2.35rem;
   border-radius: 0.75rem;
-  font-size: 0.88rem;
   box-shadow: none;
 }
 

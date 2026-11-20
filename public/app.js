@@ -89,6 +89,12 @@ function esc(value) {
   }[char]));
 }
 
+const LOGO_MARK = "/logo-mark.svg?v=12";
+
+function brandMark() {
+  return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
+}
+
 const SAFE_SVG_TAGS = new Set([
   "svg", "g", "polygon", "polyline", "line", "rect", "circle", "ellipse",
   "path", "text", "tspan", "title", "desc"
@@ -634,7 +640,7 @@ function authAsideHtml() {
   return `
     <aside class="auth-aside">
       <div class="auth-brand">
-        <span class="brand-mark">LC</span>
+        ${brandMark()}
         <div>
           <strong>Learners Connect</strong>
           <span>Assessment workspace</span>
@@ -816,7 +822,7 @@ function renderShell() {
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand">
-            <span class="brand-mark">LC</span>
+            ${brandMark()}
             <div class="brand-text">
               <strong>Learners Connect</strong>
               <span>Assessment workspace</span>
@@ -2246,7 +2252,7 @@ function renderAttempt() {
       <header class="runner-head">
         <div class="runner-head-inner">
           <div class="runner-brand">
-            <span class="brand-mark">LC</span>
+            ${brandMark()}
             <div>
               <strong>${esc(attempt.quiz.title)}</strong>
               <span>${esc(attempt.quiz.className)} · ${esc(attempt.mode)} mode</span>
