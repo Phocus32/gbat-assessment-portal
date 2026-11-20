@@ -7,13 +7,12 @@ const {
   createUser
 } = require("./fdb");
 const { hashPassword } = require("./security");
-const { logActivity } = require("./utils");
+const { logActivity, generateTemporaryPassword } = require("./utils");
 const { nameSchema, usernameSchema } = require("./validation");
 const {
   ExcelInputError,
   readStudentRows,
-  usernameBase,
-  temporaryPassword
+  usernameBase
 } = require("./excel");
 
 function classKey(value) {
@@ -87,7 +86,7 @@ async function importStudentsFromWorkbook(buffer, actor) {
       username = await uniqueUsername(usernameBase(row.firstName, row.lastName, cls.name));
     }
 
-    const password = temporaryPassword(row.firstName, row.lastName);
+    const password = generateTemporaryPassword();
     const passwordHash = await hashPassword(password);
 
     await createUser({

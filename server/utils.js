@@ -67,16 +67,29 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-async function logActivity(actor, action) {
+async function logActivity(actor, action, context = {}) {
   const isActorObject = actor && typeof actor === "object";
   const actorName = isActorObject ? (actor.name || actor.username || "System") : (typeof actor === "string" ? actor : "System");
   const actorId = isActorObject ? actor.id : null;
-  await insertDoc("activity_logs", {
+
+  const record = {
     actor_user_id: actorId,
     actor_name: String(actorName).slice(0, 120),
     action: String(action).slice(0, 255),
     created_at: new Date()
-  }, "logs");
+  };
+
+  // Optional context used for security events. Only known fields are copied so
+  // callers cannot inject arbitrary metadata into the activity log.
+  if (context && typeof context === "object") {
+    if (context.event !== undefined) record.event = String(context.event).slice(0, 64);
+    if (context.ip !== undefined) record.ip = String(context.ip).slice(0, 64);
+    if (context.userAgent !== undefined) record.user_agent = String(context.userAgent).slice(0, 255);
+    if (context.username !== undefined) record.username = String(context.username).slice(0, 120);
+    if (context.outcome !== undefined) record.outcome = String(context.outcome).slice(0, 64);
+  }
+
+  await insertDoc("activity_logs", record, "logs");
 }
 
 function dateTimeLabel(value) {

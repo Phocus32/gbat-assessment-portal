@@ -20,6 +20,9 @@ Open <http://localhost:3000>. On a brand-new project the app imports the sample
 questions, creates the classes, a teacher, a quiz per class and demo students,
 then prints the temporary passwords once in the terminal.
 
+A development JWT secret is generated into `./data` (override with
+`DATA_DIR`) unless `JWT_SECRET` is set.
+
 ```bash
 npm run dev     # auto-restart while developing
 npm test        # API tests against the Firestore emulator (Java 21+ required)
@@ -66,4 +69,4 @@ Short version:
 | `npm run import-html` | Refresh the question bank from `questions-source.html` |
 | `npm run seed-portal` | Add demo classes/quizzes/students if missing |
 | `npm run create-admin` | Create an additional admin interactively |
-| `npm run import-students -- students.csv` | Import students from CSV |
+| `npm run import-students -- students.csv` | Import students from CSV (optionally write credentials with `--out credentials.csv`) |

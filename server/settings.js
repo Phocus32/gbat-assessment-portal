@@ -32,6 +32,18 @@ const NUMERIC_KEYS = new Set([
 
 const BOOLEAN_KEYS = new Set(["requireApproval", "showSolutions", "allowRetakes"]);
 
+// Settings are read on nearly every request but written rarely. A short TTL
+// removes the ten Firestore reads per request without making an admin change
+// stale for long; saveSettings() invalidates immediately for the same instance.
+const CACHE_TTL_MS = 5000;
+let cachedSettings = null;
+let cacheExpiresAt = 0;
+
+function invalidateSettingsCache() {
+  cachedSettings = null;
+  cacheExpiresAt = 0;
+}
+
 const DEFAULTS = {
   defaultQuizMinutes: 45,
   minQuizMinutes: 1,
@@ -56,18 +68,23 @@ function coerce(key, value) {
 }
 
 async function getSettings() {
+  if (cachedSettings && Date.now() < cacheExpiresAt) return { ...cachedSettings };
+
   const entries = await Promise.all(
     Object.entries(STORAGE_KEYS).map(async ([key, docKey]) => [key, await getSetting(docKey)])
   );
   const output = {};
   for (const [key, value] of entries) output[key] = coerce(key, value);
-  return output;
+  cachedSettings = output;
+  cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+  return { ...output };
 }
 
 async function ensureSettings() {
   for (const [key, docKey] of Object.entries(STORAGE_KEYS)) {
     if ((await getSetting(docKey)) === null) await setSetting(docKey, DEFAULTS[key]);
   }
+  invalidateSettingsCache();
 }
 
 async function saveSettings(patch) {
@@ -75,6 +92,7 @@ async function saveSettings(patch) {
     if (!Object.prototype.hasOwnProperty.call(STORAGE_KEYS, key)) continue;
     await setSetting(STORAGE_KEYS[key], coerce(key, value));
   }
+  invalidateSettingsCache();
 }
 
 module.exports = {

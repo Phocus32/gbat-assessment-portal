@@ -831,6 +831,26 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(roster.status, 200);
     assert.ok(roster.body.students.some(student => student.id === student2Id));
 
+    // A teacher can only manage classes they own a quiz for: moving the
+    // student into a class they do not teach must be rejected.
+    const deniedMove = await teacherAgent
+      .patch(`/api/teacher/students/${student2Id}`)
+      .set(CSRF)
+      .send({ classId: secondClassId });
+    assert.equal(deniedMove.status, 403);
+
+    const secondQuiz = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Second Class Check",
+        classId: secondClassId,
+        subjectId: mathsSubjectId,
+        minutes: 20,
+        questionIds: [firstQuestionId, secondQuestionId]
+      });
+    assert.equal(secondQuiz.status, 201);
+
     const moved = await teacherAgent
       .patch(`/api/teacher/students/${student2Id}`)
       .set(CSRF)

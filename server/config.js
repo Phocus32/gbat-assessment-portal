@@ -53,7 +53,6 @@ const config = {
   env,
   port,
   host: process.env.HOST || "0.0.0.0",
-  appOrigin: process.env.APP_ORIGIN || `http://localhost:${port}`,
   trustProxy: process.env.TRUST_PROXY === "true" || env === "production",
   dataDir,
   firebase: {

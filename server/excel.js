@@ -50,15 +50,6 @@ function usernameBase(firstName, lastName, className) {
   return base.slice(0, 80);
 }
 
-function temporaryPassword(firstName, lastName) {
-  const clean = value => String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9]/g, "")
-    .slice(0, 36);
-  return `${clean(firstName)}${clean(lastName)}`.slice(0, 72) || "Student";
-}
-
 async function buildStudentTemplate(classNames) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Learners Connect";
@@ -90,7 +81,7 @@ async function buildStudentTemplate(classNames) {
     ["2. First name and Last name are required.", {}],
     ["3. Class must match a class already created in the portal.", {}],
     ["4. Username is optional. Leave it blank to generate firstname.lastname automatically.", {}],
-    ["5. Temporary password is generated as FirstnameLastname.", {}],
+    ["5. Each student gets a random temporary password shown only at import time.", {}],
     ["6. Every student must change their password at first sign-in.", {}],
     ["", {}],
     [`Classes available: ${classNames.length ? classNames.join(", ") : "No classes have been created yet."}`, {}],
@@ -196,6 +187,5 @@ module.exports = {
   ExcelInputError,
   buildStudentTemplate,
   readStudentRows,
-  usernameBase,
-  temporaryPassword
+  usernameBase
 };

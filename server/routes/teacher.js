@@ -71,6 +71,23 @@ async function loadOwnedQuiz(quizId, teacherId) {
   return { ...quiz, class_name: cls ? cls.name : null };
 }
 
+/**
+ * A teacher's roster scope is the set of classes where they own a quiz.
+ * Archived quizzes still count so archiving the last quiz does not revoke
+ * access to a class the teacher already manages.
+ */
+function ownedClassIdSet(quizzes) {
+  return new Set(
+    quizzes
+      .map(quiz => Number(quiz.class_id))
+      .filter(classId => Number.isInteger(classId) && classId > 0)
+  );
+}
+
+async function teacherClassIds(teacherId) {
+  return ownedClassIdSet(await listWhere("quizzes", "teacher_id", teacherId));
+}
+
 async function buildQuizResults(quiz) {
   const [rosterAll, submissions, items] = await Promise.all([
     listWhere("users", "class_id", quiz.class_id),
@@ -230,6 +247,7 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+  const ownedClassIds = ownedClassIdSet(ownedQuizzes);
   const quizzes = ownedQuizzes
     .filter(quiz => !quiz.is_deleted && inScope(quiz))
     .sort((a, b) => Number(b.id) - Number(a.id));
@@ -318,8 +336,11 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       createdAt: quiz.created_at
     })),
     classes: classes.map(cls => ({ id: cls.id, name: cls.name })),
+    manageableClasses: classes
+      .filter(cls => ownedClassIds.has(Number(cls.id)))
+      .map(cls => ({ id: cls.id, name: cls.name })),
     students: students
-      .filter(student => student.role === "student")
+      .filter(student => student.role === "student" && ownedClassIds.has(Number(student.class_id)))
       .map(student => ({
         id: student.id,
         name: student.name,
@@ -662,13 +683,15 @@ router.get("/quizzes/:id/results.csv", asyncHandler(async (req, res) => {
 }));
 
 router.get("/students", asyncHandler(async (req, res) => {
-  const [students, classes] = await Promise.all([
+  const [students, classes, classIds] = await Promise.all([
     listWhere("users", "role", "student"),
-    listClasses()
+    listClasses(),
+    teacherClassIds(req.user.id)
   ]);
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
   return res.json({
     students: students
+      .filter(student => classIds.has(Number(student.class_id)))
       .map(student => ({
         id: student.id,
         name: student.name,
@@ -686,11 +709,15 @@ router.patch("/students/:id", asyncHandler(async (req, res) => {
   const input = teacherStudentUpdateSchema.parse(req.body);
 
   const target = await getDocById("users", studentId);
-  if (!target || target.role !== "student") {
+  const classIds = await teacherClassIds(req.user.id);
+  if (!target || target.role !== "student" || !classIds.has(Number(target.class_id))) {
     return res.status(404).json({ error: "Student not found." });
   }
   const cls = await getDocById("classes", input.classId);
   if (!cls) return res.status(400).json({ error: "Class not found." });
+  if (!classIds.has(Number(cls.id))) {
+    return res.status(403).json({ error: "You can only move students between classes you teach." });
+  }
 
   await updateDocById("users", studentId, { class_id: cls.id });
   await logActivity(req.user, `Moved ${target.name} to ${cls.name}`);

@@ -46,19 +46,42 @@ function lockState(user) {
   };
 }
 
+const USERNAME_SHAPE = /^[A-Za-z0-9._-]+$/;
+
+function loginMeta(req) {
+  return {
+    ip: String(req.ip || "").slice(0, 64),
+    userAgent: String(req.get("user-agent") || "").slice(0, 255)
+  };
+}
+
 router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
   const input = loginSchema.parse(req.body);
+  const meta = loginMeta(req);
 
-  const found = await findUserByUsername(input.username);
+  const found = USERNAME_SHAPE.test(input.username)
+    ? await findUserByUsername(input.username)
+    : null;
   const user = found ? await withClassName(found) : null;
 
   if (!user) {
     await verifyDummyPassword(input.password);
+    await logActivity(null, "Failed sign-in attempt", {
+      event: "login_failed",
+      outcome: "unknown_user",
+      username: input.username,
+      ...meta
+    });
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
   const { isLocked, lockExpired } = lockState(user);
   if (isLocked) {
+    await logActivity(user, "Rejected locked-out sign-in attempt", {
+      event: "login_locked",
+      outcome: "locked",
+      ...meta
+    });
     return res.status(429).json({ error: "Too many failed attempts. Please try again later." });
   }
 
@@ -70,23 +93,27 @@ router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
 
   if (!toBoolean(user.active)) {
     await verifyDummyPassword(input.password);
+    await logActivity(user, "Rejected disabled-account sign-in attempt", {
+      event: "login_failed",
+      outcome: "inactive",
+      ...meta
+    });
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
   const passwordOk = await verifyPassword(input.password, user.password_hash);
   if (!passwordOk) {
     failedAttempts += 1;
-    if (failedAttempts >= config.loginMaxAttempts) {
-      await updateDocById("users", user.id, {
-        failed_login_attempts: failedAttempts,
-        locked_until: new Date(Date.now() + config.loginLockMinutes * 60000)
-      });
-    } else {
-      await updateDocById("users", user.id, {
-        failed_login_attempts: failedAttempts,
-        locked_until: null
-      });
-    }
+    const locked = failedAttempts >= config.loginMaxAttempts;
+    await updateDocById("users", user.id, {
+      failed_login_attempts: failedAttempts,
+      locked_until: locked ? new Date(Date.now() + config.loginLockMinutes * 60000) : null
+    });
+    await logActivity(user, "Failed sign-in attempt", {
+      event: "login_failed",
+      outcome: locked ? "locked" : "wrong_password",
+      ...meta
+    });
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
@@ -96,6 +123,8 @@ router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
     last_login_at: new Date(),
     last_activity_at: new Date()
   });
+
+  await logActivity(user, "Signed in", { event: "login_success", ...meta });
 
   const token = signSession(user);
   setSessionCookie(res, token);

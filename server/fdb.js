@@ -228,14 +228,21 @@ async function listClasses() {
 // Users (uniqueness via usernames lock docs, case-insensitive login lookup)
 // ---------------------------------------------------------------------------
 
+// Firestore document ids cannot contain "/", so encode the lock key. Valid
+// usernames (letters, numbers, dot, dash, underscore) are unchanged, while a
+// malformed login attempt still produces a safe lookup instead of an error.
+function usernameLockKey(username) {
+  return encodeURIComponent(String(username || "").trim().toLowerCase());
+}
+
 async function findUserByUsername(username) {
-  const lock = docData(await col("usernames").doc(String(username).toLowerCase()).get());
+  const lock = docData(await col("usernames").doc(usernameLockKey(username)).get());
   if (!lock) return null;
   return getDocById("users", lock.userId);
 }
 
 async function createUser(data) {
-  const lockRef = col("usernames").doc(String(data.username).toLowerCase());
+  const lockRef = col("usernames").doc(usernameLockKey(data.username));
   const counters = counterRef();
   const record = {
     name: data.name,
@@ -270,7 +277,7 @@ async function deleteUser(id) {
     const snap = await tx.get(ref);
     if (!snap.exists) return false;
     tx.delete(ref);
-    tx.delete(col("usernames").doc(String(snap.data().username).toLowerCase()));
+    tx.delete(col("usernames").doc(usernameLockKey(snap.data().username)));
     return true;
   });
 }
@@ -436,6 +443,41 @@ async function findSubmissionByAttempt(attemptId) {
 }
 
 // ---------------------------------------------------------------------------
+// Complaint replies (transactional so concurrent replies are never lost)
+// ---------------------------------------------------------------------------
+
+async function addComplaintReply(complaintId, reply) {
+  const ref = col("complaints").doc(String(complaintId));
+  return getDb().runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return null;
+
+    const complaint = normalizeValue(snap.data());
+    complaint.id = Number(complaint.id === undefined ? snap.id : complaint.id);
+    const replies = Array.isArray(complaint.replies) ? [...complaint.replies] : [];
+    const nextId = replies.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1;
+    const now = new Date();
+    const entry = {
+      id: nextId,
+      author_id: reply.authorId,
+      author_name: reply.authorName,
+      author_role: reply.authorRole,
+      message: reply.message,
+      created_at: now
+    };
+    replies.push(entry);
+
+    const patch = { replies, updated_at: now };
+    // A reply on a closed complaint is still recorded, but closing is an
+    // explicit admin decision that a new message must not silently undo.
+    if (complaint.status !== "closed") patch.status = "replied";
+    tx.update(ref, patch);
+
+    return { complaint, reply: entry };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Logs, announcements, settings
 // ---------------------------------------------------------------------------
 
@@ -486,6 +528,7 @@ module.exports = {
   deleteUser,
   withClassName,
   hasAdmin,
+  addComplaintReply,
   createQuizWithItems,
   listQuizItems,
   getQuizItem,

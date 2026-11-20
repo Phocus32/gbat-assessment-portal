@@ -62,6 +62,8 @@ const state = {
 };
 
 let confettiTimer = null;
+let modalReturnFocus = null;
+let timerMilestone = "";
 
 // Idle-session state lives outside `state` because it must also run on the
 // password screen and survive renders that replace the whole app shell.
@@ -74,6 +76,7 @@ const idle = {
   tick: null,
   heartbeat: null,
   warningShown: false,
+  lastAnnounced: null,
   overlay: null,
   started: false
 };
@@ -89,10 +92,63 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=12";
+const LOGO_MARK = "/logo-mark.svg?v=13";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
+}
+
+function focusSnapshot() {
+  const element = document.activeElement;
+  if (!element || element === document.body) return null;
+  const snapshot = {
+    id: element.id || null,
+    action: element.dataset ? element.dataset.action || null : null,
+    dataset: {},
+    form: element.form && element.form.dataset ? element.form.dataset.form || null : null
+  };
+  if (element.dataset) {
+    for (const key of ["action", "view", "id", "classId", "index", "position", "status", "mode", "target"]) {
+      if (element.dataset[key] !== undefined) snapshot.dataset[key] = element.dataset[key];
+    }
+  }
+  return snapshot;
+}
+
+function matchesDataset(element, dataset) {
+  return Object.entries(dataset).every(([key, value]) => element.dataset[key] === value);
+}
+
+function restoreFocus(snapshot) {
+  if (!snapshot) return;
+  let target = snapshot.id ? document.getElementById(snapshot.id) : null;
+  if (!target && snapshot.action) {
+    target = [...document.querySelectorAll("[data-action]")]
+      .find(element => matchesDataset(element, snapshot.dataset)) || null;
+  }
+  if (!target && snapshot.form) {
+    const form = document.querySelector(`form[data-form="${snapshot.form}"]`);
+    target = form ? form.querySelector('input:not([type="hidden"]), select, textarea, button[type="submit"]') : null;
+  }
+  if (!target) return;
+  if (target.disabled) {
+    const card = target.closest(".question-card");
+    target = card ? card.querySelector(".feedback-wrap") : null;
+  }
+  if (!target || !target.isConnected) return;
+  requestAnimationFrame(() => {
+    if (target.isConnected) target.focus({ preventScroll: true });
+  });
+}
+
+function focusMainContent() {
+  const main = document.getElementById("main-content");
+  if (!main) return;
+  requestAnimationFrame(() => main.focus({ preventScroll: true }));
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
 }
 
 const SAFE_SVG_TAGS = new Set([
@@ -145,7 +201,28 @@ function diagramHtml(value) {
 
 function fmtDate(value) {
   if (!value) return "—";
-  return String(value).replace("T", " ").slice(0, 16);
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  const now = new Date();
+  const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  if (sameDay) return `Today, ${time}`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const wasYesterday = date.getFullYear() === yesterday.getFullYear()
+    && date.getMonth() === yesterday.getMonth()
+    && date.getDate() === yesterday.getDate();
+  if (wasYesterday) return `Yesterday, ${time}`;
+
+  const includeYear = date.getFullYear() !== now.getFullYear();
+  const day = date.toLocaleDateString([], includeYear
+    ? { day: "numeric", month: "short", year: "numeric" }
+    : { day: "numeric", month: "short" });
+  return `${day}, ${time}`;
 }
 
 function letter(index) {
@@ -206,6 +283,12 @@ function applyFormVisibility() {
         box.checked = false;
       });
     });
+    const toggle = quizForm.querySelector('[data-action="toggle-all-questions"]');
+    if (toggle) {
+      const visible = [...quizForm.querySelectorAll('.check-group:not([hidden]) input[name="questionIds"]')];
+      const allChecked = visible.length > 0 && visible.every(box => box.checked);
+      toggle.textContent = allChecked ? "Clear all" : "Select all";
+    }
   }
 
   const userForm = document.querySelector('form[data-form="create-user"]');
@@ -224,6 +307,8 @@ function defaultView(role) {
 function toast(message, type = "info") {
   const node = document.createElement("div");
   node.className = `toast ${type}`;
+  node.setAttribute("role", type === "error" ? "alert" : "status");
+  node.setAttribute("aria-atomic", "true");
   node.textContent = message;
   toastRegion.appendChild(node);
   setTimeout(() => node.remove(), 4500);
@@ -378,13 +463,21 @@ function animateAnswerFeedback(entry) {
 
 function closeModal() {
   if (modalEl.open) modalEl.close();
+  const returnTo = modalReturnFocus;
+  modalReturnFocus = null;
+  restoreFocus(returnTo);
 }
 
 function openModal(html) {
+  modalReturnFocus = focusSnapshot();
   modalContent.innerHTML = html;
   labelTableCells(modalContent);
   applyFormVisibility();
   if (!modalEl.open) modalEl.showModal();
+  const firstField = modalContent.querySelector(
+    'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])'
+  );
+  if (firstField) requestAnimationFrame(() => firstField.focus({ preventScroll: true }));
   animateEntrance(modalContent);
   animateScoreRings(modalContent);
 }
@@ -497,9 +590,10 @@ function ensureIdleOverlay() {
       <h2 id="idle-title">Are you still there?</h2>
       <p class="small">For your security, you will be signed out after a period of inactivity.</p>
       <p class="idle-countdown">Signing out in <strong data-idle-seconds>15</strong> seconds</p>
+      <p class="sr-only" data-idle-live role="status" aria-live="polite"></p>
       <div class="modal-actions modal-actions-flat">
-        <button type="button" class="btn" data-idle-signout>Sign out now</button>
         <button type="button" class="btn btn-primary" data-idle-stay>Stay signed in</button>
+        <button type="button" class="btn" data-idle-signout>Sign out now</button>
       </div>
     </div>`;
   overlay.querySelector("[data-idle-stay]").addEventListener("click", async () => {
@@ -525,13 +619,28 @@ function ensureIdleOverlay() {
 function showIdleWarning(seconds) {
   const overlay = ensureIdleOverlay();
   idle.warningShown = true;
-  if (!overlay.open) overlay.showModal();
+  if (!overlay.open) {
+    overlay.showModal();
+    const stay = overlay.querySelector("[data-idle-stay]");
+    if (stay) stay.focus({ preventScroll: true });
+  }
+  const whole = Math.max(0, Math.ceil(Number(seconds) || 0));
   const label = overlay.querySelector("[data-idle-seconds]");
-  if (label) label.textContent = String(Math.max(0, seconds));
+  if (label) label.textContent = String(whole);
+  if (whole === 10 || whole === 5 || whole === 0) {
+    if (idle.lastAnnounced !== whole) {
+      idle.lastAnnounced = whole;
+      const live = overlay.querySelector("[data-idle-live]");
+      if (live) live.textContent = whole
+        ? `${whole} seconds remaining before sign out.`
+        : "Signing out now.";
+    }
+  }
 }
 
 function hideIdleWarning() {
   idle.warningShown = false;
+  idle.lastAnnounced = null;
   if (idle.overlay && idle.overlay.open) idle.overlay.close();
 }
 
@@ -665,7 +774,7 @@ function renderLogin() {
   appEl.innerHTML = `
     <div class="auth-wrap">
       ${authAsideHtml()}
-      <main class="auth-main">
+      <main class="auth-main" id="main-content" tabindex="-1">
         <section class="auth-card">
           <span class="eyebrow">Secure sign in</span>
           <h2>Welcome back</h2>
@@ -689,6 +798,10 @@ function renderLogin() {
         </section>
       </main>
     </div>`;
+  requestAnimationFrame(() => {
+    const username = document.getElementById("login-username");
+    if (username) username.focus({ preventScroll: true });
+  });
 }
 
 function renderPassword() {
@@ -697,7 +810,7 @@ function renderPassword() {
   appEl.innerHTML = `
     <div class="auth-wrap">
       ${authAsideHtml()}
-      <main class="auth-main">
+      <main class="auth-main" id="main-content" tabindex="-1">
         <section class="auth-card">
           <span class="eyebrow">${forced ? "Password required" : "Account security"}</span>
           <h2>${forced ? "Set a new password" : "Change your password"}</h2>
@@ -732,6 +845,10 @@ function renderPassword() {
         </section>
       </main>
     </div>`;
+  requestAnimationFrame(() => {
+    const password = document.getElementById("current-password");
+    if (password) password.focus({ preventScroll: true });
+  });
 }
 
 async function afterLogin(user) {
@@ -763,6 +880,8 @@ async function refresh() {
     if (state.view === "complaints") await loadComplaints();
     state.results = null;
     state.resultsQuizId = null;
+    state.userSearch = { ...state.userSearch, results: null };
+    state.classSearch = { ...state.classSearch, results: null };
     render();
   } catch (error) {
     toast(error.message, "error");
@@ -800,22 +919,25 @@ async function navTo(view) {
     }
   }
   render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  focusMainContent();
+  scrollToTop();
 }
 
 function renderShell() {
   const user = state.user;
   if (!state.data) {
-    appEl.innerHTML = `<div class="auth-main"><div class="auth-card"><h2>Loading portal…</h2></div></div>`;
+    appEl.innerHTML = `<div class="auth-main" id="main-content" tabindex="-1"><div class="auth-card"><h2>Loading portal…</h2></div></div>`;
     return;
   }
 
+  const snapshot = focusSnapshot();
   const nav = (NAV_ITEMS[user.role] || []).map(([view, label]) => `
-    <button type="button" class="nav-btn ${state.view === view ? "active" : ""}" data-action="nav" data-view="${view}">${esc(label)}</button>
+    <button type="button" class="nav-btn ${state.view === view ? "active" : ""}"${state.view === view ? ' aria-current="page"' : ""} data-action="nav" data-view="${view}">${esc(label)}</button>
   `).join("");
 
   const roleLabel = ROLE_LABEL[user.role] || user.role;
-  document.title = `${roleLabel} · Learners Connect`;
+  const viewLabel = (NAV_ITEMS[user.role] || []).find(([view]) => view === state.view)?.[1] || "Overview";
+  document.title = `${viewLabel} · ${roleLabel} · Learners Connect`;
 
   appEl.innerHTML = `
     <div class="app-frame">
@@ -839,7 +961,7 @@ function renderShell() {
           </div>
         </div>
       </header>
-      <main class="page">${renderView()}</main>
+      <main class="page" id="main-content" tabindex="-1">${renderView()}</main>
       <footer class="footer">Learners Connect · Accounts and data are private to this school.</footer>
     </div>`;
   labelTableCells(appEl);
@@ -850,6 +972,7 @@ function renderShell() {
     animateEntrance(page);
     if (user.role === "student") animateStats(page);
   }
+  restoreFocus(snapshot);
 }
 
 function renderView() {
@@ -872,12 +995,16 @@ function badge(label, tone = "neutral") {
   return `<span class="badge badge-${tone}">${esc(label)}</span>`;
 }
 
-function emptyState(title, text) {
+function emptyState(title, text, action = null) {
+  const actionHtml = action
+    ? `<button type="button" class="btn btn-primary" data-action="${esc(action.action)}"${action.view ? ` data-view="${esc(action.view)}"` : ""}>${esc(action.label)}</button>`
+    : "";
   return `
     <div class="empty">
-      <span class="empty-mark">·</span>
+      <span class="empty-mark" aria-hidden="true">·</span>
       <h3>${esc(title)}</h3>
       <p>${esc(text)}</p>
+      ${actionHtml}
     </div>`;
 }
 
@@ -959,7 +1086,7 @@ function renderAdminOverview() {
                   </tr>`).join("")}
               </tbody>
             </table>
-          </div>` : emptyState("No classes yet", "Create a class before adding students.")}
+          </div>` : emptyState("No classes yet", "Create a class before adding students.", { label: "Create a class", action: "nav", view: "classes" })}
       </section>
     </div>`;
 }
@@ -1020,7 +1147,7 @@ function renderAdminUsers() {
             </div>
             <div class="field">
               <span class="field-label">Generated credentials</span>
-              <p class="form-note">Username defaults to <strong>firstname.lastname</strong>; temporary password is <strong>FirstnameLastname</strong>. Students must reset it at first sign-in.</p>
+              <p class="form-note">Username defaults to <strong>firstname.lastname</strong>; each student receives a random temporary password. Students must reset it at first sign-in.</p>
             </div>
           </div>
           <p class="form-note">Required columns: First name, Last name, Class. Username is optional. Download the template above to share with students.</p>
@@ -1074,7 +1201,7 @@ function renderAdminUsers() {
               }).join("")}
             </tbody>
           </table>
-        </div>` : emptyState("No accounts yet", "Add a teacher or student account to get started.")}
+        </div>` : emptyState("No accounts yet", "Add a teacher or student account to get started.", { label: "Add account", action: "open-create-user" })}
     </section>`;
 }
 
@@ -1109,7 +1236,7 @@ function renderAdminSubjects() {
               }).join("")}
             </tbody>
           </table>
-        </div>` : emptyState("No subjects yet", "Add a subject before creating questions or assigning teachers.")}
+        </div>` : emptyState("No subjects yet", "Add a subject before creating questions or assigning teachers.", { label: "Create a subject", action: "nav", view: "subjects" })}
     </section>`;
 }
 
@@ -1647,11 +1774,13 @@ function renderTeacherQuizzes() {
 
 function renderTeacherStudents() {
   const students = state.data.students || [];
-  const classes = state.data.classes || [];
-  const grouped = classes.map(cls => ({
-    cls,
-    students: students.filter(student => Number(student.classId) === Number(cls.id))
-  }));
+  const classes = state.data.manageableClasses || state.data.classes || [];
+  const grouped = classes
+    .filter(cls => students.some(student => Number(student.classId) === Number(cls.id)))
+    .map(cls => ({
+      cls,
+      students: students.filter(student => Number(student.classId) === Number(cls.id))
+    }));
   const unassigned = students.filter(student => !student.classId);
   return `
     ${pageHead("Roster", "Students", "Move a student between classes. Results stay attached to their attempts.",
@@ -2112,7 +2241,7 @@ function renderStudentResults() {
                 </tr>`).join("")}
             </tbody>
           </table>
-        </div>` : emptyState("No results yet", "Complete a practice or exam attempt to see your results here.")}
+        </div>` : emptyState("No results yet", "Complete a practice or exam attempt to see your results here.", { label: "Find a quiz", action: "nav", view: "dashboard" })}
     </section>`;
 }
 
@@ -2120,6 +2249,7 @@ function renderStudentResults() {
 
 function beginAttempt(attempt) {
   clearTimer();
+  timerMilestone = "";
   state.attempt = attempt;
   state.currentIndex = 0;
   state.submitting = false;
@@ -2129,6 +2259,7 @@ function beginAttempt(attempt) {
   startTimer();
   renderAttempt();
   window.scrollTo({ top: 0 });
+  focusMainContent();
 }
 
 function formatClock(totalSeconds) {
@@ -2165,6 +2296,7 @@ function startTimer() {
 function updateTimerDisplay(remaining) {
   const timerEl = document.getElementById("attempt-timer");
   const progressEl = document.getElementById("attempt-progress");
+  const liveEl = document.getElementById("attempt-timer-live");
   if (!timerEl || !state.attempt) return;
 
   let seconds = remaining;
@@ -2184,12 +2316,22 @@ function updateTimerDisplay(remaining) {
     const max = Number(state.attempt.secondsRemaining) || 1;
     progressEl.max = max;
     progressEl.value = Math.min(max, seconds);
+    progressEl.setAttribute("aria-valuetext", `${formatClock(seconds)} remaining`);
+  }
+
+  if (liveEl && seconds <= 60 && timerMilestone !== "minute") {
+    timerMilestone = "minute";
+    liveEl.textContent = "Under 1 minute remaining.";
+  } else if (liveEl && seconds <= 300 && !timerMilestone) {
+    timerMilestone = "five";
+    liveEl.textContent = "5 minutes remaining.";
   }
 }
 
 function renderAttempt() {
   const attempt = state.attempt;
   if (!attempt) return;
+  const snapshot = focusSnapshot();
 
   if (state.currentIndex < 0) state.currentIndex = 0;
   if (state.currentIndex >= attempt.questions.length) state.currentIndex = attempt.questions.length - 1;
@@ -2245,7 +2387,12 @@ function renderAttempt() {
 
   const timer = practice
     ? `<div class="runner-timer"><span>Mode</span><div class="timer-value">Practice</div></div>`
-    : `<div class="runner-timer"><span>Time remaining</span><div class="timer-value" id="attempt-timer">--:--</div><progress id="attempt-progress" max="${Number(attempt.secondsRemaining) || 1}" value="${Number(attempt.secondsRemaining) || 0}"></progress></div>`;
+    : `<div class="runner-timer" role="timer" aria-label="Time remaining">
+        <span>Time remaining</span>
+        <div class="timer-value" id="attempt-timer" aria-hidden="true">--:--</div>
+        <progress id="attempt-progress" max="${Number(attempt.secondsRemaining) || 1}" value="${Number(attempt.secondsRemaining) || 0}" aria-label="Time remaining"></progress>
+        <span class="sr-only" id="attempt-timer-live" role="status" aria-live="polite"></span>
+      </div>`;
 
   appEl.innerHTML = `
     <div class="runner-shell">
@@ -2273,7 +2420,7 @@ function renderAttempt() {
           </div>
           <div class="palette-grid">${palette}</div>
         </aside>
-        <main class="runner-main">
+        <main class="runner-main" id="main-content" tabindex="-1">
           <section class="question-card">
             <div class="question-top">
               <div class="meta">
@@ -2286,7 +2433,7 @@ function renderAttempt() {
             <p class="question-text">${esc(question.text)}</p>
             ${diagramHtml(question.diagramSvg)}
             <div class="option-grid">${options}</div>
-            <div class="feedback-wrap">${feedback}</div>
+            <div class="feedback-wrap" tabindex="-1">${feedback}</div>
             <div class="runner-actions">
               <div class="runner-actions-group">
                 <button type="button" class="btn" data-action="prev-question" ${state.currentIndex === 0 ? "disabled" : ""}>Previous</button>
@@ -2305,7 +2452,9 @@ function renderAttempt() {
   updateTimerDisplay();
 
   const layout = appEl.querySelector(".runner-layout");
-  if (layout) animateEntrance(layout);
+  const skipAnimation = snapshot && ["answer", "prev-question", "next-question", "goto-question"].includes(snapshot.action);
+  if (layout && !skipAnimation) animateEntrance(layout);
+  restoreFocus(snapshot);
 }
 
 async function startQuiz(quizId, mode) {
@@ -2833,7 +2982,7 @@ function openMoveUser(userId) {
         <div class="field">
           <label for="move-class">Class</label>
           <select id="move-class" name="classId" required>
-            ${state.data.classes.map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
+            ${(state.data.manageableClasses || state.data.classes).map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
           </select>
         </div>
         <p class="form-error" data-form-error role="alert"></p>
@@ -2946,7 +3095,7 @@ function openMoveStudent(studentId) {
         <div class="field">
           <label for="student-move-class">Class</label>
           <select id="student-move-class" name="classId" required>
-            ${state.data.classes.map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
+            ${(state.data.manageableClasses || state.data.classes).map(cls => `<option value="${cls.id}" ${cls.id === target.classId ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
           </select>
         </div>
         <p class="form-error" data-form-error role="alert"></p>
@@ -3204,7 +3353,8 @@ async function runAction(button) {
       state.view = "results";
       state.screen = "app";
       render();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      focusMainContent();
+      scrollToTop();
       return;
     }
     case "delete-announcement": {

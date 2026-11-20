@@ -14,6 +14,7 @@ const {
   insertDoc,
   getDocById,
   updateDocById,
+  addComplaintReply,
   listAll,
   listClasses
 } = require("../fdb");
@@ -150,27 +151,16 @@ router.get("/:id", asyncHandler(async (req, res) => {
 router.post("/:id/replies", requireAnyRole("admin"), asyncHandler(async (req, res) => {
   const id = idSchema.parse(req.params.id);
   const input = complaintReplySchema.parse(req.body);
-  const complaint = await getDocById("complaints", id);
-  if (!complaint) return res.status(404).json({ error: "Complaint not found." });
 
-  const replies = Array.isArray(complaint.replies) ? [...complaint.replies] : [];
-  const now = new Date();
-  replies.push({
-    id: replies.length + 1,
-    author_id: req.user.id,
-    author_name: req.user.name,
-    author_role: req.user.role,
-    message: input.message,
-    created_at: now
+  const result = await addComplaintReply(id, {
+    authorId: req.user.id,
+    authorName: req.user.name,
+    authorRole: req.user.role,
+    message: input.message
   });
+  if (!result) return res.status(404).json({ error: "Complaint not found." });
 
-  await updateDocById("complaints", id, {
-    replies,
-    status: "replied",
-    updated_at: now
-  });
-
-  await logActivity(req.user, `Replied to complaint "${complaint.subject}"`);
+  await logActivity(req.user, `Replied to complaint "${result.complaint.subject}"`);
   const saved = await getDocById("complaints", id);
   return res.status(201).json({ complaint: present(saved, await classNames()) });
 }));
