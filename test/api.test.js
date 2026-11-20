@@ -1311,4 +1311,46 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(meAfterExpiry.status, 401);
     assert.equal(meAfterExpiry.body.code, "SESSION_EXPIRED");
   });
+
+  await t.test("teacher and admin can switch practice mode for a quiz", async () => {
+    const teacherPatch = await teacherAgent
+      .patch(`/api/teacher/quizzes/${quizId}`)
+      .set(CSRF)
+      .send({ allowPractice: false });
+    assert.equal(teacherPatch.status, 200);
+    assert.equal(teacherPatch.body.allowPractice, false);
+    assert.equal(teacherPatch.body.quiz.allowPractice, false);
+
+    const deniedForOtherTeacher = await teacher2Agent
+      .patch(`/api/teacher/quizzes/${quizId}`)
+      .set(CSRF)
+      .send({ allowPractice: true });
+    assert.equal(deniedForOtherTeacher.status, 404);
+
+    const dashboard = await studentAgent.get("/api/student/dashboard");
+    assert.equal(dashboard.status, 200);
+    const shownQuiz = dashboard.body.quizzes.find(item => Number(item.id) === Number(quizId));
+    assert.equal(shownQuiz.allowPractice, false);
+
+    const blocked = await studentAgent
+      .post(`/api/student/quizzes/${quizId}/start`)
+      .set(CSRF)
+      .send({ mode: "Practice" });
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.body.error, /Practice is disabled/);
+
+    const adminPatch = await adminAgent
+      .patch(`/api/admin/quizzes/${quizId}`)
+      .set(CSRF)
+      .send({ allowPractice: true });
+    assert.equal(adminPatch.status, 200);
+    assert.equal(adminPatch.body.quiz.allowPractice, true);
+
+    const started = await studentAgent
+      .post(`/api/student/quizzes/${quizId}/start`)
+      .set(CSRF)
+      .send({ mode: "Practice" });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.mode, "Practice");
+  });
 });

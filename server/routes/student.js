@@ -29,6 +29,11 @@ function secondsRemaining(attempt) {
   return Math.max(0, Math.floor((attempt.expires_at.getTime() - Date.now()) / 1000));
 }
 
+// Older quizzes without the field keep the original behaviour (practice on).
+function practiceAllowed(quiz) {
+  return quiz && quiz.allow_practice !== false;
+}
+
 async function loadQuizForStudent(quizId, user) {
   const quiz = await getDocById("quizzes", quizId);
   if (!quiz || quiz.is_deleted) return { error: { status: 404, message: "Quiz not found." } };
@@ -206,6 +211,7 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
         title: quiz.title,
         minutes: Number(quiz.minutes),
         isOpen: toBoolean(quiz.is_open),
+        allowPractice: practiceAllowed(quiz),
         questionCount: questionCountMap.get(Number(quiz.id)) || 0,
         attempts: bucket.attempts,
         bestPct: bucket.bestPct,
@@ -251,6 +257,10 @@ router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {
 
   const { quiz, error } = await loadQuizForStudent(quizId, req.user);
   if (error) return res.status(error.status).json({ error: error.message });
+
+  if (input.mode === "Practice" && !practiceAllowed(quiz)) {
+    return res.status(403).json({ error: "Practice is disabled for this quiz." });
+  }
 
   const settings = await getSettings();
   await expireStaleExamAttempts(req.user.id, quizId);
@@ -337,6 +347,10 @@ router.get("/attempts/:id", asyncHandler(async (req, res) => {
     return res.status(410).json({ error: "This attempt has expired." });
   }
 
+  if (attempt.mode === "Practice" && !practiceAllowed(quiz)) {
+    return res.status(403).json({ error: "Practice is disabled for this quiz." });
+  }
+
   if (attempt.mode === "Exam" && remaining !== null && Number(remaining) <= 0) {
     await updateDocById("attempts", attemptId, { status: "expired" });
     return res.status(410).json({ error: "Time has expired for this attempt." });
@@ -376,6 +390,13 @@ router.post("/attempts/:id/answer", asyncHandler(async (req, res) => {
   if (attempt.mode === "Exam" && remaining !== null && Number(remaining) <= 0) {
     await updateDocById("attempts", attemptId, { status: "expired" });
     return res.status(410).json({ error: "Time has expired for this attempt." });
+  }
+
+  if (attempt.mode === "Practice") {
+    const quiz = await getDocById("quizzes", attempt.quiz_id);
+    if (!practiceAllowed(quiz)) {
+      return res.status(403).json({ error: "Practice is disabled for this quiz." });
+    }
   }
 
   const question = await getQuizItem(attempt.quiz_id, input.position);
@@ -442,6 +463,11 @@ router.post("/attempts/:id/submit", asyncHandler(async (req, res) => {
     }
   }
 
+  const quiz = await getDocById("quizzes", attempt.quiz_id);
+  if (attempt.mode === "Practice" && !practiceAllowed(quiz)) {
+    return res.status(403).json({ error: "Practice is disabled for this quiz." });
+  }
+
   let result;
   try {
     result = await submitAttemptResults({ attempt });
@@ -460,7 +486,6 @@ router.post("/attempts/:id/submit", asyncHandler(async (req, res) => {
     throw err;
   }
 
-  const quiz = await getDocById("quizzes", attempt.quiz_id);
   await logActivity(
     req.user,
     `Submitted "${quiz ? quiz.title : "quiz"}" (${result.score}/${result.total}, ${result.pct}%)`

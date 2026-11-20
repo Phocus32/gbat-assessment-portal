@@ -41,6 +41,9 @@ npm run emulators
   keeps the session alive; an in-progress exam pauses the countdown.
 - Classes are managed as batches of students: admins can add, move and remove
   students from each class and search accounts and classes by name.
+- Practice mode is controlled per quiz. Teachers can enable/disable it on their
+  own quizzes, admins can override any quiz, and the server blocks students
+  from starting or continuing disabled practice attempts.
 - Teachers and students can submit complaints; admins see all complaints, can
   filter/search them, reply and close/reopen them.
 

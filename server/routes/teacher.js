@@ -165,6 +165,7 @@ async function buildQuizResults(quiz) {
       classId: quiz.class_id,
       minutes: Number(quiz.minutes),
       shuffleQuestions: toBoolean(quiz.shuffle_questions),
+      allowPractice: quiz.allow_practice !== false,
       isOpen: toBoolean(quiz.is_open)
     },
     students,
@@ -310,6 +311,7 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       subjectName: allSubjects.get(Number(quiz.subject_id)) || quiz.subject || "General",
       minutes: Number(quiz.minutes),
       shuffleQuestions: toBoolean(quiz.shuffle_questions),
+      allowPractice: quiz.allow_practice !== false,
       isOpen: toBoolean(quiz.is_open),
       approved: quiz.approved !== false,
       questionCount: questionCountMap.get(Number(quiz.id)) || 0,
@@ -516,6 +518,7 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
       subject: subjectName,
       minutes: input.minutes,
       shuffle_questions: Boolean(input.shuffleQuestions),
+      allow_practice: input.allowPractice !== false,
       is_open: true,
       is_deleted: false,
       approved,
@@ -541,13 +544,15 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
       subjectId: Number(input.subjectId),
       minutes: input.minutes,
       shuffleQuestions: input.shuffleQuestions,
+      allowPractice: input.allowPractice !== false,
       approved
     },
     id: quizId,
     title: input.title,
     classId: input.classId,
     minutes: input.minutes,
-    shuffleQuestions: input.shuffleQuestions
+    shuffleQuestions: input.shuffleQuestions,
+    allowPractice: input.allowPractice !== false
   });
 }));
 
@@ -581,18 +586,28 @@ router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
     patch.shuffle_questions = Boolean(input.shuffleQuestions);
     actions.push(`${input.shuffleQuestions ? "Enabled" : "Disabled"} question shuffling for "${quiz.title}"`);
   }
+  if (input.allowPractice !== undefined) {
+    patch.allow_practice = Boolean(input.allowPractice);
+    actions.push(`${input.allowPractice ? "Enabled" : "Disabled"} practice for "${quiz.title}"`);
+  }
 
   await updateDocById("quizzes", quizId, patch);
   for (const action of actions) await logActivity(req.user, action);
+
+  const allowPractice = input.allowPractice === undefined
+    ? quiz.allow_practice !== false
+    : input.allowPractice;
   return res.json({
     isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen,
     shuffleQuestions: input.shuffleQuestions === undefined
       ? toBoolean(quiz.shuffle_questions)
       : input.shuffleQuestions,
+    allowPractice,
     quiz: {
       id: quiz.id,
       title: quiz.title,
       shuffleQuestions: input.shuffleQuestions === undefined ? toBoolean(quiz.shuffle_questions) : input.shuffleQuestions,
+      allowPractice,
       isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen
     }
   });

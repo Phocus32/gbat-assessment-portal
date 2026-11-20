@@ -159,6 +159,7 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       minutes: Number(quiz.minutes),
       questionCount: questionCounts[index],
       isOpen: quiz.is_open === true || quiz.is_open === 1,
+      allowPractice: quiz.allow_practice !== false,
       approved: quiz.approved !== false,
       createdAt: quiz.created_at
     })),
@@ -368,15 +369,25 @@ router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
     patch.is_open = Boolean(input.isOpen);
     actions.push(`${input.isOpen ? "Opened" : "Closed"} quiz "${quiz.title}"`);
   }
+  if (input.allowPractice !== undefined) {
+    patch.allow_practice = Boolean(input.allowPractice);
+    actions.push(`${input.allowPractice ? "Enabled" : "Disabled"} practice for "${quiz.title}"`);
+  }
 
   await updateDocById("quizzes", quizId, patch);
   for (const action of actions) await logActivity(req.user, action);
+
+  const allowPractice = patch.allow_practice === undefined
+    ? quiz.allow_practice !== false
+    : patch.allow_practice;
   return res.json({
+    allowPractice,
     quiz: {
       id: quiz.id,
       title: quiz.title,
       approved: patch.approved === undefined ? quiz.approved !== false : patch.approved,
-      isOpen: patch.isOpen === undefined ? quiz.is_open === true || quiz.is_open === 1 : patch.isOpen
+      isOpen: patch.isOpen === undefined ? quiz.is_open === true || quiz.is_open === 1 : patch.isOpen,
+      allowPractice
     }
   });
 }));

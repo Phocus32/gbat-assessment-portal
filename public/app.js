@@ -1119,7 +1119,7 @@ function renderAdminQuizzes() {
       ${quizzes.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Quiz</th><th>Teacher</th><th>Subject</th><th>Class</th><th>Questions</th><th>Approval</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Quiz</th><th>Teacher</th><th>Subject</th><th>Class</th><th>Questions</th><th>Approval</th><th>Practice</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               ${quizzes.map(quiz => `
                 <tr>
@@ -1129,6 +1129,7 @@ function renderAdminQuizzes() {
                   <td>${esc(quiz.className || "—")}</td>
                   <td>${esc(quiz.questionCount)}</td>
                   <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
+                  <td>${quiz.allowPractice !== false ? badge("On", "brand") : badge("Off", "neutral")}</td>
                   <td>${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}</td>
                   <td>
                     <div class="row-actions">
@@ -1136,6 +1137,7 @@ function renderAdminQuizzes() {
                         ? `<button type="button" class="btn btn-sm btn-ghost" data-action="unapprove-quiz" data-id="${quiz.id}">Return</button>`
                         : `<button type="button" class="btn btn-sm btn-success" data-action="approve-quiz" data-id="${quiz.id}">Approve</button>`}
                       <button type="button" class="btn btn-sm btn-ghost" data-action="admin-toggle-quiz" data-id="${quiz.id}">${quiz.isOpen ? "Close" : "Open"}</button>
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="admin-toggle-practice" data-id="${quiz.id}">${quiz.allowPractice !== false ? "Disable practice" : "Enable practice"}</button>
                     </div>
                   </td>
                 </tr>`).join("")}
@@ -1558,6 +1560,15 @@ function renderTeacherQuizzes() {
               </label>
             </div>
             <div class="field">
+              <label class="check-item">
+                <input type="checkbox" name="allowPractice" checked>
+                <span>
+                  <strong>Allow practice mode</strong>
+                  <small>Students can try this quiz untimed with instant feedback. You can turn this off later.</small>
+                </span>
+              </label>
+            </div>
+            <div class="field">
               <div class="field-label-row">
                 <span class="field-label">Questions</span>
                 <button type="button" class="link-btn" data-action="toggle-all-questions">Select all</button>
@@ -1598,7 +1609,7 @@ function renderTeacherQuizzes() {
       ${d.quizzes.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Quiz</th><th>Subject</th><th>Class</th><th>Questions</th><th>Duration</th><th>Order</th><th>Approval</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Quiz</th><th>Subject</th><th>Class</th><th>Questions</th><th>Duration</th><th>Order</th><th>Practice</th><th>Approval</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
             <tbody>
               ${d.quizzes.map(quiz => `
                 <tr>
@@ -1608,6 +1619,7 @@ function renderTeacherQuizzes() {
                   <td>${esc(quiz.questionCount)}</td>
                   <td>${esc(quiz.minutes)} min</td>
                   <td>${quiz.shuffleQuestions ? badge("Shuffled", "brand") : badge("Fixed", "neutral")}</td>
+                  <td>${quiz.allowPractice !== false ? badge("On", "brand") : badge("Off", "neutral")}</td>
                   <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
                   <td>${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}</td>
                   <td class="nowrap">${esc(fmtDate(quiz.createdAt))}</td>
@@ -1616,6 +1628,7 @@ function renderTeacherQuizzes() {
                       <button type="button" class="btn btn-sm" data-action="view-quiz-results" data-id="${quiz.id}">Results</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-quiz" data-id="${quiz.id}">${quiz.isOpen ? "Close" : "Open"}</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-shuffle" data-id="${quiz.id}">${quiz.shuffleQuestions ? "Fixed order" : "Shuffle"}</button>
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-practice" data-id="${quiz.id}">${quiz.allowPractice !== false ? "Disable practice" : "Enable practice"}</button>
                       <button type="button" class="btn btn-sm btn-danger" data-action="archive-quiz" data-id="${quiz.id}">Archive</button>
                     </div>
                   </td>
@@ -2008,7 +2021,7 @@ function renderStudentDashboard() {
       <section class="panel">
         <div class="panel-head"><h2 class="panel-title">How attempts work</h2></div>
         <div class="panel-body stack">
-          <div class="notice"><strong>Practice</strong> is untimed and${d.settings.showSolutions ? " shows the correct answer and worked solution immediately after each question" : " does not reveal answers until your administrator enables worked solutions"}.</div>
+          <div class="notice"><strong>Practice</strong> is available only when your teacher enables it. It is untimed and${d.settings.showSolutions ? " shows the correct answer and worked solution immediately after each question" : " does not reveal answers until your administrator enables worked solutions"}.</div>
           <div class="notice warn"><strong>Exam</strong> is timed and never reveals correctness until you submit. Once you choose an answer, it cannot be changed.</div>
           <p class="form-note">Starting the same mode again resumes an unfinished attempt. ${!d.settings.allowRetakes
             ? "Retakes are disabled; each quiz can be submitted once."
@@ -2057,7 +2070,9 @@ function renderStudentDashboard() {
             ${quiz.bestPct !== null ? `<p class="quiz-hint">${Number(quiz.bestPct) >= Number(d.settings.passMark) ? "Nice work — you passed this one!" : "Try again and beat your best score."}</p>` : ""}
             <div class="quiz-actions">
               ${quiz.isOpen ? `
-                <button type="button" class="btn btn-primary btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Practice">Practice</button>
+                ${quiz.allowPractice !== false
+                  ? `<button type="button" class="btn btn-primary btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Practice">Practice</button>`
+                  : `<span class="muted small">Practice is off for this quiz</span>`}
                 <button type="button" class="btn btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Exam">Start exam</button>` : `<span class="muted small">This quiz is closed.</span>`}
             </div>
           </article>`).join("")}
@@ -3083,6 +3098,15 @@ async function runAction(button) {
       toast(`Quiz ${target.isOpen ? "closed" : "opened"}.`, "success");
       return;
     }
+    case "admin-toggle-practice": {
+      const target = (d.quizzes || []).find(quiz => Number(quiz.id) === Number(id));
+      if (!target) return;
+      const allowPractice = target.allowPractice === false;
+      await api(`/admin/quizzes/${id}`, { method: "PATCH", body: { allowPractice } });
+      await refresh();
+      toast(`Practice ${allowPractice ? "enabled" : "disabled"}.`, "success");
+      return;
+    }
     case "delete-class": {
       const target = d.classes.find(cls => cls.id === id);
       if (!target) return;
@@ -3144,6 +3168,18 @@ async function runAction(button) {
       });
       await refresh();
       toast(`Question shuffling ${target.shuffleQuestions ? "disabled" : "enabled"}.`, "success");
+      return;
+    }
+    case "toggle-practice": {
+      const target = d.quizzes.find(quiz => quiz.id === id);
+      if (!target) return;
+      const allowPractice = target.allowPractice === false;
+      await api(`/teacher/quizzes/${id}`, {
+        method: "PATCH",
+        body: { allowPractice }
+      });
+      await refresh();
+      toast(`Practice ${allowPractice ? "enabled" : "disabled"}.`, "success");
       return;
     }
     case "archive-quiz": {
@@ -3625,6 +3661,7 @@ async function handleSubmit(form) {
           subjectId: Number(data.get("subjectId")),
           minutes: Number(data.get("minutes")),
           shuffleQuestions: Boolean(data.get("shuffleQuestions")),
+          allowPractice: Boolean(data.get("allowPractice")),
           questionIds
         }
       });

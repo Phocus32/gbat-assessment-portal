@@ -88,6 +88,7 @@ const quizCreateSchema = z.object({
   subjectId: z.coerce.number().int().positive("Choose a subject."),
   minutes: z.coerce.number().int().min(1, "Duration must be at least 1 minute.").max(240, "Duration cannot exceed 240 minutes."),
   shuffleQuestions: z.boolean().default(false),
+  allowPractice: z.boolean().default(true),
   questionIds: z
     .array(z.coerce.number().int().positive())
     .min(1, "Select at least one question.")
@@ -97,17 +98,21 @@ const quizCreateSchema = z.object({
 
 const quizUpdateSchema = z.object({
   isOpen: z.boolean().optional(),
-  shuffleQuestions: z.boolean().optional()
-}).refine(value => value.isOpen !== undefined || value.shuffleQuestions !== undefined, {
-  message: "No changes were supplied."
-});
+  shuffleQuestions: z.boolean().optional(),
+  allowPractice: z.boolean().optional()
+}).refine(
+  value => value.isOpen !== undefined || value.shuffleQuestions !== undefined || value.allowPractice !== undefined,
+  { message: "No changes were supplied." }
+);
 
 const adminQuizUpdateSchema = z.object({
   approved: z.boolean().optional(),
-  isOpen: z.boolean().optional()
-}).refine(value => value.approved !== undefined || value.isOpen !== undefined, {
-  message: "No changes were supplied."
-});
+  isOpen: z.boolean().optional(),
+  allowPractice: z.boolean().optional()
+}).refine(
+  value => value.approved !== undefined || value.isOpen !== undefined || value.allowPractice !== undefined,
+  { message: "No changes were supplied." }
+);
 
 const teacherStudentUpdateSchema = z.object({
   classId: z.coerce.number().int().positive("Select a class.")
