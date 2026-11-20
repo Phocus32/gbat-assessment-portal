@@ -26,7 +26,7 @@ const SOURCE_PATH = path.join(__dirname, "..", "questions-source.html");
 function parseArgs(argv) {
   const options = {
     demoStudents: true,
-    quizTitle: "GBAT Diagnostic Assessment",
+    quizTitle: "Learners Connect Diagnostic Assessment",
     minutes: 45
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -114,7 +114,7 @@ async function ensureTeacher(created) {
     .sort((a, b) => a.id - b.id);
   if (teachers[0]) return teachers[0];
 
-  const name = (process.env.IMPORT_TEACHER_NAME || "GBAT Teacher").trim();
+  const name = (process.env.IMPORT_TEACHER_NAME || "Learners Connect Teacher").trim();
   const baseUsername = (process.env.IMPORT_TEACHER_USERNAME || "gbat.teacher").trim();
   let username = baseUsername;
   let suffix = 1;
@@ -213,7 +213,7 @@ async function ensureDemoStudents(classes, created) {
 }
 
 async function ensureWelcomeAnnouncement(teacher, created) {
-  const text = "Welcome to the GBAT portal. Your diagnostic assessment is now open. Sign in with your username and temporary password.";
+  const text = "Welcome to Learners Connect. Your diagnostic assessment is now open. Sign in with your username and temporary password.";
   const announcements = await listAll("announcements");
   if (announcements.some(item => item.text === text)) return false;
 

@@ -1,6 +1,6 @@
-# GBAT Assessment Portal
+# Learners Connect
 
-Secure online assessment portal for admins, teachers and students.
+Learners Connect is a secure online assessment portal for admins, teachers and students.
 
 The app is a single Express service with **Cloud Firestore** as its only
 database. It is designed for Vercel's free Hobby plan plus Firebase's free

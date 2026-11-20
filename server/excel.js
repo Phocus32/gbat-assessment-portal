@@ -61,7 +61,7 @@ function temporaryPassword(firstName, lastName) {
 
 async function buildStudentTemplate(classNames) {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "GBAT Online Assessment Portal";
+  workbook.creator = "Learners Connect";
   workbook.created = new Date();
 
   const sheet = workbook.addWorksheet("Students", {
@@ -84,7 +84,7 @@ async function buildStudentTemplate(classNames) {
   const notes = workbook.addWorksheet("Instructions");
   notes.columns = [{ width: 100 }];
   const lines = [
-    ["GBAT student import template", { bold: true, size: 14 }],
+    ["Learners Connect student import template", { bold: true, size: 14 }],
     ["", {}],
     ["1. Enter one student per row on the Students sheet.", {}],
     ["2. First name and Last name are required.", {}],

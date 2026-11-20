@@ -618,7 +618,7 @@ function showLogin(message = "") {
   state.results = null;
   state.resultsQuizId = null;
   state.importCredentials = [];
-  document.title = "Sign in · GBAT Online Assessment Portal";
+  document.title = "Sign in · Learners Connect";
   renderLogin();
 }
 
@@ -626,7 +626,7 @@ function showPassword(forced) {
   clearTimer();
   state.screen = "password";
   state.passwordForced = Boolean(forced || (state.user && state.user.mustChangePassword));
-  document.title = "Password · GBAT Online Assessment Portal";
+  document.title = "Password · Learners Connect";
   renderPassword();
 }
 
@@ -634,14 +634,14 @@ function authAsideHtml() {
   return `
     <aside class="auth-aside">
       <div class="auth-brand">
-        <span class="brand-mark">GBAT</span>
+        <span class="brand-mark">LC</span>
         <div>
-          <strong>GBAT Portal</strong>
-          <span>Online assessment</span>
+          <strong>Learners Connect</strong>
+          <span>Assessment workspace</span>
         </div>
       </div>
       <div class="auth-hero">
-        <span class="eyebrow">Ghana Basic Achievement Test</span>
+        <span class="eyebrow">Learner assessment workspace</span>
         <h1>Assess with clarity and confidence.</h1>
         <p>A focused workspace for practice, timed exams and class-level results.</p>
         <ul class="feature-list">
@@ -809,17 +809,17 @@ function renderShell() {
   `).join("");
 
   const roleLabel = ROLE_LABEL[user.role] || user.role;
-  document.title = `${roleLabel} · GBAT Online Assessment Portal`;
+  document.title = `${roleLabel} · Learners Connect`;
 
   appEl.innerHTML = `
     <div class="app-frame">
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand">
-            <span class="brand-mark">GBAT</span>
+            <span class="brand-mark">LC</span>
             <div class="brand-text">
-              <strong>Assessment Portal</strong>
-              <span>Ghana Basic Achievement Test</span>
+              <strong>Learners Connect</strong>
+              <span>Assessment workspace</span>
             </div>
           </div>
           <nav class="main-nav" aria-label="Main navigation">${nav}</nav>
@@ -834,7 +834,7 @@ function renderShell() {
         </div>
       </header>
       <main class="page">${renderView()}</main>
-      <footer class="footer">GBAT Online Assessment Portal · Accounts and data are private to this school.</footer>
+      <footer class="footer">Learners Connect · Accounts and data are private to this school.</footer>
     </div>`;
   labelTableCells(appEl);
   applyFormVisibility();
@@ -2246,7 +2246,7 @@ function renderAttempt() {
       <header class="runner-head">
         <div class="runner-head-inner">
           <div class="runner-brand">
-            <span class="brand-mark">GBAT</span>
+            <span class="brand-mark">LC</span>
             <div>
               <strong>${esc(attempt.quiz.title)}</strong>
               <span>${esc(attempt.quiz.className)} · ${esc(attempt.mode)} mode</span>

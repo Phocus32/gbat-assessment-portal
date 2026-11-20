@@ -659,7 +659,7 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
   };
 }
 
-const TEXT_TEMPLATE = `GBAT question import template (TXT/MD)
+const TEXT_TEMPLATE = `Learners Connect question import template (TXT/MD)
 
 Start each question with "Question: ...". Blank lines are allowed. Use A., B.,
 C. and D. for the four options, then Answer: and Solution:. The subject line is
@@ -712,7 +712,7 @@ function buildJsonTemplate() {
 
 async function buildXlsxTemplate() {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "GBAT Online Assessment Portal";
+  workbook.creator = "Learners Connect";
   workbook.created = new Date();
 
   const sheet = workbook.addWorksheet("Questions", {
@@ -736,7 +736,7 @@ async function buildXlsxTemplate() {
   const notes = workbook.addWorksheet("Instructions");
   notes.columns = [{ width: 110 }];
   const lines = [
-    ["GBAT question import template", { bold: true, size: 14 }],
+    ["Learners Connect question import template", { bold: true, size: 14 }],
     ["", {}],
     ["1. Put one question on each row of the Questions sheet.", {}],
     ["2. question, optionA, optionB, optionC, optionD, answer and solution are required.", {}],

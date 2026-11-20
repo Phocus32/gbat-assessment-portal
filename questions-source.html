@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GBAT Online Assessment Portal</title>
+  <title>Learners Connect</title>
   <style>
     :root {
       --primary: #1d4ed8;
@@ -159,9 +159,9 @@
 
   <nav class="navbar">
     <div class="brand">
-      <div class="brand-badge">GBAT</div>
+      <div class="brand-badge">LC</div>
       <div>
-        <div class="brand-title">GBAT Assessment Portal</div>
+        <div class="brand-title">Learners Connect</div>
         <div class="brand-sub">Mathematics Mock Quizzes</div>
       </div>
     </div>
@@ -344,7 +344,7 @@
           <div class="form-grid">
             <div class="field">
               <label>Quiz Title *</label>
-              <input type="text" id="qzTitleInput" placeholder="e.g. GBAT Mock Paper 1" />
+              <input type="text" id="qzTitleInput" placeholder="e.g. Learners Connect Mock Paper 1" />
             </div>
             <div class="field">
               <label>Assign to Class *</label>
@@ -1169,7 +1169,7 @@
         .filter(Boolean);
       const missedText = missedList.length ? missedList.join(", ") : "None (100% score)";
 
-      const subject = `GBAT Quiz Score: ${sub.studentName} (${sub.className}) - ${sub.score}/${sub.total} (${sub.pct}%)`;
+      const subject = `Learners Connect Quiz Score: ${sub.studentName} (${sub.className}) - ${sub.score}/${sub.total} (${sub.pct}%)`;
       const summaryBody =
         `Student Name: ${sub.studentName}\n` +
         `Class: ${sub.className}\n` +

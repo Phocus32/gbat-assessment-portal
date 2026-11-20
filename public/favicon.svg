@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GBAT">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Learners Connect">
   <rect width="64" height="64" rx="14" fill="#1f5c45"/>
-  <path d="M18 18h28v8H26v6h16v8H26v6h20v8H18z" fill="#f4efe4"/>
-  <circle cx="50" cy="47" r="6" fill="#d9a441"/>
+  <path d="M14 16h7v28h16v7H14z" fill="#f4efe4"/>
+  <path d="M51 20c-4-5-12-6-17-2-5 4-6 13-2 19 3 5 10 7 16 3" fill="none" stroke="#f4efe4" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="52" cy="14" r="5" fill="#d9a441"/>
 </svg>

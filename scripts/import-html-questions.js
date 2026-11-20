@@ -106,7 +106,7 @@ async function findOrCreateTeacher(options) {
   if (teachers[0]) return { teacher: teachers[0], created: false, temporaryPassword: null };
 
   const baseUsername = (process.env.IMPORT_TEACHER_USERNAME || "gbat.teacher").trim();
-  const name = (process.env.IMPORT_TEACHER_NAME || "GBAT Teacher").trim();
+  const name = (process.env.IMPORT_TEACHER_NAME || "Learners Connect Teacher").trim();
   let username = baseUsername;
   let suffix = 1;
 

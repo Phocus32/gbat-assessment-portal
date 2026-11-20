@@ -1,6 +1,6 @@
 ROLE
 You are a senior full-stack developer. Upgrade the attached single-file HTML app
-(GBAT Online Assessment Portal) so that teachers can create quizzes for a
+(Learners Connect) so that teachers can create quizzes for a
 specific class and see that class's scores.
 
 CURRENT SITUATION

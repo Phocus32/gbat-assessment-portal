@@ -9,7 +9,7 @@ async function start() {
   await ensureBootstrapped();
 
   const server = app.listen(config.port, config.host, () => {
-    console.log(`GBAT portal listening on http://${config.host}:${config.port}`);
+    console.log(`Learners Connect listening on http://${config.host}:${config.port}`);
   });
 
   async function shutdown(signal) {

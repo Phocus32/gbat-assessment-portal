@@ -18,7 +18,7 @@ function saveCredentials(credentials) {
   if (!credentials.length) return null;
   const file = credentialsPath();
   const lines = [
-    "GBAT Assessment Portal - initial credentials",
+    "Learners Connect - initial credentials",
     "These accounts must change their password at first sign-in.",
     ""
   ];
@@ -41,7 +41,7 @@ function saveCredentials(credentials) {
 function printCredentials(credentials, file) {
   console.log("");
   console.log("============================================================");
-  console.log(" GBAT portal is ready");
+  console.log(" Learners Connect is ready");
   console.log("============================================================");
   for (const item of credentials) {
     console.log(` ${item.role}: ${item.username} / ${item.password}`);

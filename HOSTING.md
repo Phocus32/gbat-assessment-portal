@@ -1,4 +1,4 @@
-# Host the GBAT Assessment Portal on Vercel + Firebase
+# Host Learners Connect on Vercel + Firebase
 
 This setup uses:
 
@@ -69,10 +69,10 @@ Optional first-boot variables:
 ## 3. First sign-in
 
 1. Open the deployment URL and check `/api/health` → `{"ok":true}`.
-2. Open the **Functions** log in Vercel and find the `GBAT portal is ready` block:
+2. Open the **Functions** log in Vercel and find the `Learners Connect is ready` block:
 
    ```text
-   GBAT portal is ready
+   Learners Connect is ready
    admin / XnKK@n4uuw%HHjG6
    ```
 

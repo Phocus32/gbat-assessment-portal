@@ -137,6 +137,8 @@ test("secured portal end-to-end API flow", async t => {
     const page = await request(app).get("/");
     assert.equal(page.status, 200);
     assert.match(page.headers["cache-control"], /no-store/);
+    assert.match(page.text, /<title>Learners Connect<\/title>/);
+    assert.doesNotMatch(page.text, /GBAT/);
     const match = page.text.match(/src="\/app\.js\?v=([\w-]{1,32})"/);
     assert.ok(match, "app.js should carry a cache-busting asset version");
 

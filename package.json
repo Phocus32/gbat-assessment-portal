@@ -2,7 +2,7 @@
   "name": "gbat-assessment-portal",
   "version": "1.0.0",
   "private": true,
-  "description": "Secured GBAT online assessment portal",
+  "description": "Secure Learners Connect online assessment portal",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
