@@ -126,6 +126,33 @@ const announcementCreateSchema = z.object({
   text: z.string().trim().min(1, "Enter a message.").max(2000, "Message is too long.")
 });
 
+const complaintCreateSchema = z.object({
+  subject: z.string().trim().min(3, "Subject must be at least 3 characters.").max(160, "Subject is too long."),
+  message: z.string().trim().min(10, "Please describe your complaint in at least 10 characters.").max(4000, "Complaint is too long."),
+  category: z.enum(["academic", "technical", "facility", "other"]).default("other")
+});
+
+const complaintReplySchema = z.object({
+  message: z.string().trim().min(1, "Enter a reply.").max(4000, "Reply is too long.")
+});
+
+const complaintStatusSchema = z.object({
+  status: z.enum(["open", "closed"])
+});
+
+const classMembersSchema = z.object({
+  userIds: z
+    .array(z.coerce.number().int().positive())
+    .min(1, "Select at least one student.")
+    .max(200, "Too many students selected.")
+    .refine(ids => new Set(ids).size === ids.length, "Duplicate students are not allowed.")
+});
+
+const searchQuerySchema = z.object({
+  q: z.string().trim().max(120, "Search term is too long.").optional().default(""),
+  classId: z.coerce.number().int().positive().optional()
+});
+
 const settingsSchema = z.object({
   defaultQuizMinutes: z.coerce.number().int().min(1).max(240),
   minQuizMinutes: z.coerce.number().int().min(1).max(240),
@@ -172,5 +199,10 @@ module.exports = {
   startAttemptSchema,
   answerSchema,
   announcementCreateSchema,
+  complaintCreateSchema,
+  complaintReplySchema,
+  complaintStatusSchema,
+  classMembersSchema,
+  searchQuerySchema,
   settingsSchema
 };

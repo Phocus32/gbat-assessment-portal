@@ -33,6 +33,17 @@ npm run emulators
 # FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 npm start
 ```
 
+## Sessions and complaints
+
+- Inactive sessions are signed out automatically (default: 1 minute idle, with a
+  15-second warning). Set `IDLE_TIMEOUT_MINUTES`, `IDLE_WARNING_SECONDS` and
+  `IDLE_HEARTBEAT_SECONDS` in `.env` to change this. Activity in any open tab
+  keeps the session alive; an in-progress exam pauses the countdown.
+- Classes are managed as batches of students: admins can add, move and remove
+  students from each class and search accounts and classes by name.
+- Teachers and students can submit complaints; admins see all complaints, can
+  filter/search them, reply and close/reopen them.
+
 ## Host it online
 
 See **[HOSTING.md](HOSTING.md)** for the full Vercel + Firebase walkthrough.

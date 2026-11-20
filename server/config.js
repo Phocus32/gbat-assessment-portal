@@ -64,6 +64,12 @@ const config = {
   },
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "4h",
+  // Inactivity timeout. The browser counts real user activity; the server also
+  // enforces it so a stale cookie cannot be reused by somebody else.
+  idleTimeoutMinutes: Math.max(1, Number(process.env.IDLE_TIMEOUT_MINUTES || 1)),
+  idleWarningSeconds: Math.max(5, Number(process.env.IDLE_WARNING_SECONDS || 15)),
+  idleHeartbeatSeconds: Math.max(5, Number(process.env.IDLE_HEARTBEAT_SECONDS || 15)),
+  activityWriteIntervalSeconds: Math.max(5, Number(process.env.ACTIVITY_WRITE_INTERVAL_SECONDS || 15)),
   cookieName: "gbat_session",
   secureCookies: process.env.COOKIE_SECURE === "true" || env === "production",
   bcryptRounds: Number(process.env.BCRYPT_ROUNDS || 12),

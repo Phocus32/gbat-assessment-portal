@@ -2543,3 +2543,110 @@ progress::-moz-progress-bar {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Idle-session warning (kept outside the shared dialog so it can interrupt a
+   modal without destroying its contents). */
+.idle-warning {
+  width: min(100% - 2rem, 420px);
+  max-height: none;
+  padding: 0;
+}
+
+.idle-warning::backdrop {
+  background: rgba(12, 28, 22, 0.62);
+  backdrop-filter: blur(6px);
+}
+
+.idle-warning-card {
+  padding: 1.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.idle-warning-card h2 {
+  margin: 0.35rem 0;
+  font-size: 1.35rem;
+}
+
+.idle-countdown {
+  margin: 1rem 0;
+  padding: 0.7rem;
+  border-radius: 12px;
+  background: var(--sun-soft);
+  color: var(--sun);
+  font-weight: 700;
+}
+
+.idle-countdown strong {
+  font-size: 1.2rem;
+}
+
+/* Complaints and class membership */
+.complaint-item {
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.complaint-item:last-child {
+  border-bottom: 0;
+}
+
+.complaint-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.complaint-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.complaint-head .row-actions {
+  justify-content: flex-end;
+}
+
+.reply-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.reply-card {
+  padding: 0.75rem;
+  border-left: 3px solid var(--brand);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.reply-card p {
+  margin: 0;
+}
+
+.member-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.member-row strong,
+.member-row .cell-sub {
+  display: block;
+}

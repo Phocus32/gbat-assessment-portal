@@ -55,6 +55,7 @@ async function resetDatabase() {
     "attempts",
     "class_names",
     "classes",
+    "complaints",
     "meta",
     "questions",
     "quizzes",
@@ -1137,5 +1138,177 @@ test("secured portal end-to-end API flow", async t => {
     const { readStudentRows, ExcelInputError } = require("../server/excel");
     await assert.rejects(() => readStudentRows(null), ExcelInputError);
     await assert.rejects(() => readStudentRows(undefined), ExcelInputError);
+  });
+
+  await t.test("admin search finds accounts and classes by name", async () => {
+    const created = await adminAgent
+      .post("/api/admin/users")
+      .set(CSRF)
+      .send({ name: "Searchable Student", username: "search.student", role: "student", classId });
+    assert.equal(created.status, 201);
+
+    const byName = await adminAgent.get("/api/admin/search?q=searchable");
+    assert.equal(byName.status, 200);
+    assert.ok(byName.body.users.some(user => user.id === created.body.user.id));
+    assert.equal(byName.body.users[0].className, "Basic 8A - Gold");
+
+    const byClass = await adminAgent.get(`/api/admin/search?classId=${classId}`);
+    assert.ok(byClass.body.users.every(user => Number(user.classId) === Number(classId)));
+
+    const byClassName = await adminAgent.get("/api/admin/search?q=Basic%208B");
+    assert.ok(byClassName.body.classes.some(cls => cls.id === secondClassId));
+  });
+
+  await t.test("admin manages a class as a batch of students", async () => {
+    const created = await adminAgent
+      .post("/api/admin/users")
+      .set(CSRF)
+      .send({ name: "Batch Student", username: "batch.student", role: "student", classId });
+    assert.equal(created.status, 201);
+    const studentId = created.body.user.id;
+
+    const added = await adminAgent
+      .post(`/api/admin/classes/${secondClassId}/members`)
+      .set(CSRF)
+      .send({ userIds: [studentId] });
+    assert.equal(added.status, 200);
+    assert.equal(added.body.count, 1);
+
+    const moved = await getDocById("users", studentId);
+    assert.equal(Number(moved.class_id), Number(secondClassId));
+
+    const rejected = await adminAgent
+      .post(`/api/admin/classes/${secondClassId}/members`)
+      .set(CSRF)
+      .send({ userIds: [teacher1Id] });
+    assert.equal(rejected.status, 400);
+
+    const removed = await adminAgent
+      .delete(`/api/admin/classes/${secondClassId}/members/${studentId}`)
+      .set(CSRF);
+    assert.equal(removed.status, 200);
+    const unassigned = await getDocById("users", studentId);
+    assert.equal(unassigned.class_id, null);
+  });
+
+  await t.test("teachers and students submit complaints that only they and admin can read", async () => {
+    const fromTeacher = await teacherAgent
+      .post("/api/complaints")
+      .set(CSRF)
+      .send({
+        subject: "Broken projector",
+        category: "facility",
+        message: "The projector in the exam hall is not working."
+      });
+    assert.equal(fromTeacher.status, 201);
+    assert.equal(fromTeacher.body.complaint.senderRole, "teacher");
+    assert.equal(fromTeacher.body.complaint.status, "open");
+    const teacherComplaintId = fromTeacher.body.complaint.id;
+
+    const fromStudent = await studentAgent
+      .post("/api/complaints")
+      .set(CSRF)
+      .send({
+        subject: "Quiz did not load",
+        category: "technical",
+        message: "I clicked start but the quiz stayed blank on my phone."
+      });
+    assert.equal(fromStudent.status, 201);
+    assert.equal(fromStudent.body.complaint.senderRole, "student");
+    assert.equal(fromStudent.body.complaint.senderClassName, "Basic 8A - Gold");
+    const studentComplaintId = fromStudent.body.complaint.id;
+
+    const teacherList = await teacherAgent.get("/api/complaints");
+    assert.equal(teacherList.status, 200);
+    assert.ok(teacherList.body.complaints.every(item => item.id === teacherComplaintId));
+
+    const studentList = await studentAgent.get("/api/complaints");
+    assert.deepEqual(studentList.body.complaints.map(item => item.id), [studentComplaintId]);
+
+    const otherStudent = await adminAgent.get(`/api/complaints/${teacherComplaintId}`);
+    assert.equal(otherStudent.status, 200);
+
+    const deniedRead = await studentAgent.get(`/api/complaints/${teacherComplaintId}`);
+    assert.equal(deniedRead.status, 404);
+
+    const deniedCreate = await adminAgent
+      .post("/api/complaints")
+      .set(CSRF)
+      .send({ subject: "Admin note", message: "Admins reply instead of complaining." });
+    assert.equal(deniedCreate.status, 403);
+
+    const deniedReply = await teacherAgent
+      .post(`/api/complaints/${studentComplaintId}/replies`)
+      .set(CSRF)
+      .send({ message: "I cannot reply as a teacher." });
+    assert.equal(deniedReply.status, 403);
+
+    const filtered = await adminAgent.get("/api/complaints?role=student&q=quiz");
+    assert.equal(filtered.status, 200);
+    assert.deepEqual(filtered.body.complaints.map(item => item.id), [studentComplaintId]);
+
+    const replied = await adminAgent
+      .post(`/api/complaints/${studentComplaintId}/replies`)
+      .set(CSRF)
+      .send({ message: "We fixed the quiz. Please try again." });
+    assert.equal(replied.status, 201);
+    assert.equal(replied.body.complaint.status, "replied");
+    assert.equal(replied.body.complaint.replies.length, 1);
+
+    const studentAfterReply = await studentAgent.get(`/api/complaints/${studentComplaintId}`);
+    assert.equal(studentAfterReply.body.complaint.replies[0].message, "We fixed the quiz. Please try again.");
+
+    const closed = await adminAgent
+      .patch(`/api/complaints/${studentComplaintId}/status`)
+      .set(CSRF)
+      .send({ status: "closed" });
+    assert.equal(closed.status, 200);
+    assert.equal(closed.body.complaint.status, "closed");
+
+    const onlyOpen = await adminAgent.get("/api/complaints?status=open");
+    assert.ok(onlyOpen.body.complaints.every(item => item.status === "open"));
+  });
+
+  await t.test("idle sessions expose settings and expire after inactivity", async () => {
+    const username = "idle.check";
+    const password = "IdlePass1234";
+    const idleUserId = await createUser({
+      name: "Idle Checker",
+      username,
+      password,
+      role: "teacher",
+      subjectIds: [generalSubjectId]
+    });
+    const { agent, response } = await login(username, password);
+    assert.equal(response.status, 200);
+
+    const settings = await agent.get("/api/auth/session");
+    assert.equal(settings.status, 200);
+    assert.equal(settings.body.idleTimeoutSeconds, 60);
+    assert.equal(settings.body.warningSeconds, 15);
+    assert.equal(settings.body.heartbeatSeconds, 15);
+    assert.ok(settings.body.expiresAt);
+
+    await updateDocById("users", idleUserId, {
+      last_activity_at: new Date(Date.now() - 30000)
+    });
+
+    const activity = await agent.post("/api/auth/activity").set(CSRF).send({});
+    assert.equal(activity.status, 200);
+    assert.equal(activity.body.ok, true);
+    const touched = await getDocById("users", idleUserId);
+    assert.ok(touched.last_activity_at instanceof Date);
+    assert.ok(Date.now() - touched.last_activity_at.getTime() < 5000);
+
+    const meBeforeExpiry = await agent.get("/api/auth/me");
+    assert.equal(meBeforeExpiry.status, 200);
+
+    await updateDocById("users", idleUserId, {
+      last_activity_at: new Date(Date.now() - 2 * 60 * 1000)
+    });
+
+    const meAfterExpiry = await agent.get("/api/auth/me");
+    assert.equal(meAfterExpiry.status, 401);
+    assert.equal(meAfterExpiry.body.code, "SESSION_EXPIRED");
   });
 });

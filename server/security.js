@@ -3,7 +3,7 @@
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const config = require("./config");
-const { getDocById, withClassName } = require("./fdb");
+const { getDocById, withClassName, updateDocById } = require("./fdb");
 const { publicUser } = require("./utils");
 
 async function hashPassword(password) {
@@ -51,6 +51,44 @@ function setSessionCookie(res, token) {
   });
 }
 
+function idleTimeoutMs() {
+  return config.idleTimeoutMinutes * 60 * 1000;
+}
+
+// The settings the browser needs to run its own countdown. Having one source
+// of truth avoids a client that logs out later than the server (or vice versa).
+function sessionSettings() {
+  return {
+    idleTimeoutSeconds: Math.round(idleTimeoutMs() / 1000),
+    warningSeconds: config.idleWarningSeconds,
+    heartbeatSeconds: config.idleHeartbeatSeconds
+  };
+}
+
+function sessionExpiry(lastActivity) {
+  const base = lastActivity instanceof Date ? lastActivity.getTime() : Date.now();
+  return new Date(base + idleTimeoutMs()).toISOString();
+}
+
+/**
+ * Persist activity at most once per interval. Every authenticated request
+ * touches this, so the timer only depends on real usage rather than on the
+ * browser sending a separate heartbeat (which it also does as a backstop).
+ */
+async function touchLastActivity(user) {
+  const now = Date.now();
+  const last = user.last_activity_at instanceof Date ? user.last_activity_at.getTime() : 0;
+  const minInterval = Math.min(
+    config.activityWriteIntervalSeconds * 1000,
+    Math.floor(idleTimeoutMs() / 3)
+  );
+
+  if (last && now - last < minInterval) return now;
+  await updateDocById("users", user.id, { last_activity_at: new Date(now) });
+  user.last_activity_at = new Date(now);
+  return now;
+}
+
 function clearSessionCookie(res) {
   res.clearCookie(config.cookieName, {
     httpOnly: true,
@@ -78,8 +116,27 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: "Authentication required." });
     }
 
+    const lastActivity = user.last_activity_at instanceof Date ? user.last_activity_at.getTime() : null;
+    if (lastActivity && Date.now() - lastActivity > idleTimeoutMs()) {
+      clearSessionCookie(res);
+      return res.status(401).json({
+        code: "SESSION_EXPIRED",
+        error: "Your session expired because of inactivity. Please sign in again."
+      });
+    }
+
+    // A legacy account has no timestamp yet; the first request starts the clock.
+    // A failed activity write must never invalidate an otherwise valid session.
+    try {
+      await touchLastActivity(user);
+    } catch {
+      // Ignore transient Firestore errors; the next request retries.
+    }
+
     req.user = user;
     req.publicUser = publicUser(user);
+    req.sessionSettings = sessionSettings();
+    req.sessionExpiresAt = sessionExpiry(user.last_activity_at);
     return next();
   } catch (error) {
     return res.status(401).json({ error: "Authentication required." });
@@ -89,6 +146,15 @@ async function authenticate(req, res, next) {
 function requireRole(role) {
   return (req, res, next) => {
     if (!req.user || req.user.role !== role) {
+      return res.status(403).json({ error: "Forbidden." });
+    }
+    return next();
+  };
+}
+
+function requireAnyRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ error: "Forbidden." });
     }
     return next();
@@ -112,7 +178,11 @@ module.exports = {
   signSession,
   setSessionCookie,
   clearSessionCookie,
+  sessionSettings,
+  sessionExpiry,
+  touchLastActivity,
   authenticate,
   requireRole,
+  requireAnyRole,
   requirePasswordChanged
 };

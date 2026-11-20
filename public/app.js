@@ -19,6 +19,7 @@ const NAV_ITEMS = {
     ["users", "Users"],
     ["quizzes", "Quizzes"],
     ["activity", "Activity"],
+    ["complaints", "Complaints"],
     ["settings", "Settings"]
   ],
   teacher: [
@@ -28,11 +29,13 @@ const NAV_ITEMS = {
     ["students", "Students"],
     ["results", "Results"],
     ["submissions", "Submissions"],
-    ["announcements", "Announcements"]
+    ["announcements", "Announcements"],
+    ["complaints", "Complaints"]
   ],
   student: [
     ["dashboard", "Dashboard"],
-    ["results", "My results"]
+    ["results", "My results"],
+    ["complaints", "Complaints"]
   ]
 };
 
@@ -50,10 +53,31 @@ const state = {
   submitting: false,
   results: null,
   resultsQuizId: null,
-  importCredentials: []
+  importCredentials: [],
+  complaints: [],
+  complaintStats: null,
+  complaintFilters: { q: "", status: "all", role: "all" },
+  userSearch: { q: "", classId: "", results: null },
+  classSearch: { q: "", results: null }
 };
 
 let confettiTimer = null;
+
+// Idle-session state lives outside `state` because it must also run on the
+// password screen and survive renders that replace the whole app shell.
+const idle = {
+  timeoutMs: 60000,
+  warningMs: 15000,
+  heartbeatMs: 15000,
+  lastActivity: Date.now(),
+  expiresAt: Date.now() + 60000,
+  tick: null,
+  heartbeat: null,
+  warningShown: false,
+  overlay: null,
+  started: false
+};
+const IDLE_STORAGE_KEY = "gbat:idle-activity";
 
 function esc(value) {
   return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, char => ({
@@ -398,7 +422,7 @@ async function api(path, options = {}) {
     error.payload = payload;
 
     if (response.status === 401 && !options.ignoreAuth) {
-      handleSessionExpired();
+      handleSessionExpired(error);
     }
     if (response.status === 403 && error.code === "PASSWORD_CHANGE_REQUIRED") {
       state.user.mustChangePassword = true;
@@ -410,9 +434,168 @@ async function api(path, options = {}) {
   return payload;
 }
 
-function handleSessionExpired() {
+function handleSessionExpired(error) {
   if (state.screen === "login") return;
-  showLogin("Your session expired. Please sign in again.");
+  const message = error && error.code === "SESSION_EXPIRED"
+    ? "Your session expired after a period of inactivity. Please sign in again."
+    : "Your session expired. Please sign in again.";
+  showLogin(message);
+}
+
+/* --------------------------------------------------------------------------
+ * Idle session: browser countdown + warning, backed by the server's own
+ * inactivity check. A heartbeat keeps an active exam alive without letting an
+ * abandoned tab stay signed in forever.
+ * ------------------------------------------------------------------------ */
+
+function applyIdleSettings(settings, serverNow, expiresAt) {
+  if (settings) {
+    idle.timeoutMs = Math.max(10000, Number(settings.idleTimeoutSeconds || 60) * 1000);
+    idle.warningMs = Math.max(2000, Math.min(
+      Number(settings.warningSeconds || 15) * 1000,
+      idle.timeoutMs / 2
+    ));
+    idle.heartbeatMs = Math.max(5000, Number(settings.heartbeatSeconds || 15) * 1000);
+  }
+
+  const serverMs = serverNow ? Date.parse(serverNow) : Date.now();
+  const clockOffset = Number.isFinite(serverMs) ? serverMs - Date.now() : 0;
+  idle.lastActivity = Number.isFinite(serverMs) ? serverMs : Date.now();
+  const expiryMs = expiresAt ? Date.parse(expiresAt) : NaN;
+  idle.expiresAt = Number.isFinite(expiryMs) ? expiryMs - clockOffset : idle.lastActivity + idle.timeoutMs;
+}
+
+function noteIdleActivity(force) {
+  const now = Date.now();
+  if (force !== true && now - idle.lastActivity < 3000) return;
+  idle.lastActivity = now;
+  idle.expiresAt = now + idle.timeoutMs;
+  try {
+    localStorage.setItem(IDLE_STORAGE_KEY, String(now));
+  } catch {
+    // Private browsing can disable storage; the local timer still works.
+  }
+  if (idle.warningShown) hideIdleWarning();
+}
+
+function ensureIdleOverlay() {
+  if (idle.overlay) return idle.overlay;
+  // A dialog sits in the browser's top layer, so the warning still appears
+  // above another modal (for example an open edit form).
+  const overlay = document.createElement("dialog");
+  overlay.className = "modal idle-warning";
+  overlay.setAttribute("aria-labelledby", "idle-title");
+  overlay.innerHTML = `
+    <div class="idle-warning-card">
+      <span class="eyebrow">Session security</span>
+      <h2 id="idle-title">Are you still there?</h2>
+      <p class="small">For your security, you will be signed out after a period of inactivity.</p>
+      <p class="idle-countdown">Signing out in <strong data-idle-seconds>15</strong> seconds</p>
+      <div class="modal-actions modal-actions-flat">
+        <button type="button" class="btn" data-idle-signout>Sign out now</button>
+        <button type="button" class="btn btn-primary" data-idle-stay>Stay signed in</button>
+      </div>
+    </div>`;
+  overlay.querySelector("[data-idle-stay]").addEventListener("click", async () => {
+    try {
+      await api("/auth/activity", { method: "POST" });
+      noteIdleActivity(true);
+      hideIdleWarning();
+      toast("You are signed in for another session.", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  overlay.querySelector("[data-idle-signout]").addEventListener("click", () => {
+    stopIdleSession();
+    logout();
+  });
+  overlay.addEventListener("cancel", event => event.preventDefault());
+  document.body.appendChild(overlay);
+  idle.overlay = overlay;
+  return overlay;
+}
+
+function showIdleWarning(seconds) {
+  const overlay = ensureIdleOverlay();
+  idle.warningShown = true;
+  if (!overlay.open) overlay.showModal();
+  const label = overlay.querySelector("[data-idle-seconds]");
+  if (label) label.textContent = String(Math.max(0, seconds));
+}
+
+function hideIdleWarning() {
+  idle.warningShown = false;
+  if (idle.overlay && idle.overlay.open) idle.overlay.close();
+}
+
+function stopIdleSession() {
+  if (idle.tick !== null) clearInterval(idle.tick);
+  if (idle.heartbeat !== null) clearInterval(idle.heartbeat);
+  idle.tick = null;
+  idle.heartbeat = null;
+  idle.started = false;
+  hideIdleWarning();
+}
+
+async function idleLogout() {
+  stopIdleSession();
+  try {
+    await api("/auth/logout", { method: "POST", ignoreAuth: true });
+  } catch {
+    // Show the signed-out screen even when the network is unavailable.
+  }
+  showLogin("Your session expired after a period of inactivity. Please sign in again.");
+}
+
+function idleTick() {
+  if (!state.user || !["app", "password"].includes(state.screen)) return;
+
+  // An exam may last longer than the idle window. Reading without moving must
+  // not sign a student out mid-attempt, so pause the countdown until it ends.
+  if (state.attempt) {
+    idle.expiresAt = Date.now() + idle.timeoutMs;
+    idle.lastActivity = Date.now();
+    return;
+  }
+
+  const remaining = idle.expiresAt - Date.now();
+  if (remaining <= 0) {
+    idleLogout();
+    return;
+  }
+  if (remaining <= idle.warningMs) showIdleWarning(Math.ceil(remaining / 1000));
+  else if (idle.warningShown) hideIdleWarning();
+}
+
+async function idleHeartbeat() {
+  if (!state.user || !["app", "password"].includes(state.screen)) return;
+  const hasRecentActivity = Date.now() - idle.lastActivity < idle.timeoutMs;
+  if (!state.attempt && !hasRecentActivity) return;
+  try {
+    await api("/auth/activity", { method: "POST" });
+  } catch {
+    // api() handles 401; other failures are retried on the next tick.
+  }
+}
+
+function startIdleSession() {
+  if (idle.started) return;
+  idle.started = true;
+  if (Date.now() - idle.lastActivity > idle.timeoutMs) noteIdleActivity(true);
+  idle.tick = setInterval(idleTick, 1000);
+  idle.heartbeat = setInterval(idleHeartbeat, idle.heartbeatMs);
+}
+
+async function syncIdleSession() {
+  if (!state.user) return;
+  try {
+    const settings = await api("/auth/session");
+    applyIdleSettings(settings, settings.serverNow, settings.expiresAt);
+    startIdleSession();
+  } catch {
+    // Keep the defaults if the settings call fails.
+  }
 }
 
 function clearTimer() {
@@ -424,6 +607,7 @@ function clearTimer() {
 
 function showLogin(message = "") {
   clearTimer();
+  stopIdleSession();
   state.user = null;
   state.data = null;
   state.screen = "login";
@@ -546,6 +730,7 @@ function renderPassword() {
 
 async function afterLogin(user) {
   state.user = user;
+  await syncIdleSession();
   if (user.mustChangePassword) {
     showPassword(true);
     return;
@@ -569,6 +754,7 @@ async function loadData() {
 async function refresh() {
   try {
     await loadData();
+    if (state.view === "complaints") await loadComplaints();
     state.results = null;
     state.resultsQuizId = null;
     render();
@@ -593,12 +779,19 @@ function render() {
   renderShell();
 }
 
-function navTo(view) {
+async function navTo(view) {
   state.screen = "app";
   state.view = view;
   if (view === "results") {
     state.results = null;
     state.resultsQuizId = null;
+  }
+  if (view === "complaints") {
+    try {
+      await loadComplaints();
+    } catch (error) {
+      toast(error.message, "error");
+    }
   }
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -702,6 +895,7 @@ function renderAdminView() {
   if (state.view === "users") return renderAdminUsers();
   if (state.view === "quizzes") return renderAdminQuizzes();
   if (state.view === "activity") return renderAdminActivity();
+  if (state.view === "complaints") return renderComplaints();
   if (state.view === "settings") return renderAdminSettings();
   return renderAdminOverview();
 }
@@ -764,13 +958,52 @@ function renderAdminOverview() {
     </div>`;
 }
 
+/** Rows shown in the Users screen: server search results when a search ran. */
+function adminUsersShown() {
+  if (state.userSearch.results) return state.userSearch.results;
+  const term = state.userSearch.q.trim().toLowerCase();
+  return state.data.users.filter(user => {
+    if (state.userSearch.classId && Number(user.classId) !== Number(state.userSearch.classId)) return false;
+    if (!term) return true;
+    return [user.name, user.username, user.className]
+      .some(value => String(value || "").toLowerCase().includes(term));
+  });
+}
+
+function adminClassOptions(selected) {
+  return state.data.classes.map(cls =>
+    `<option value="${cls.id}" ${Number(selected) === Number(cls.id) ? "selected" : ""}>${esc(cls.name)}</option>`
+  ).join("");
+}
+
 function renderAdminUsers() {
-  const users = state.data.users;
+  const users = adminUsersShown();
   return `
     ${pageHead("Access control", "Users", "Every account is individual. Temporary passwords must be changed at first sign-in.",
       `<a class="btn" href="/api/admin/students/template.xlsx">Student template</a>
        <button type="button" class="btn btn-primary" data-action="open-create-user">Add account</button>`)}
     <section class="panel">
+      <div class="panel-head"><h2 class="panel-title">Find an account</h2></div>
+      <div class="panel-body">
+        <form class="inline-form" data-form="search-users">
+          <div class="field">
+            <label for="user-search-q">Name or username</label>
+            <input id="user-search-q" name="q" type="search" maxlength="120" placeholder="e.g. Ama Mensah" value="${esc(state.userSearch.q)}">
+          </div>
+          <div class="field">
+            <label for="user-search-class">Class</label>
+            <select id="user-search-class" name="classId">
+              <option value="">All classes</option>
+              ${adminClassOptions(state.userSearch.classId)}
+            </select>
+          </div>
+          <p class="form-error" data-form-error role="alert"></p>
+          <button type="submit" class="btn btn-primary">Search</button>
+          <button type="button" class="btn" data-action="clear-user-search">Clear</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel mt-1">
       <div class="panel-head"><h2 class="panel-title">Bulk add students from Excel</h2></div>
       <div class="panel-body">
         <form class="form" data-form="import-students">
@@ -912,11 +1145,32 @@ function renderAdminQuizzes() {
     </section>`;
 }
 
+function adminClassesShown() {
+  if (state.classSearch.results) return state.classSearch.results;
+  const term = state.classSearch.q.trim().toLowerCase();
+  if (!term) return state.data.classes;
+  return state.data.classes.filter(cls => String(cls.name || "").toLowerCase().includes(term));
+}
+
 function renderAdminClasses() {
-  const classes = state.data.classes;
+  const classes = adminClassesShown();
   return `
-    ${pageHead("Structure", "Classes", "Students are grouped by class. Class deletion is blocked while students or quizzes remain.")}
+    ${pageHead("Structure", "Classes", "Each class is a batch of students. Add or remove students from a class, and search classes by name.")}
     <section class="panel">
+      <div class="panel-head"><h2 class="panel-title">Find a class</h2></div>
+      <div class="panel-body">
+        <form class="inline-form" data-form="search-classes">
+          <div class="field">
+            <label for="class-search-q">Class name</label>
+            <input id="class-search-q" name="q" type="search" maxlength="120" placeholder="e.g. Basic 8" value="${esc(state.classSearch.q)}">
+          </div>
+          <p class="form-error" data-form-error role="alert"></p>
+          <button type="submit" class="btn btn-primary">Search</button>
+          <button type="button" class="btn" data-action="clear-class-search">Clear</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel mt-1">
       <div class="panel-head"><h2 class="panel-title">Add a class</h2></div>
       <div class="panel-body">
         <form class="inline-form" data-form="create-class">
@@ -940,10 +1194,11 @@ function renderAdminClasses() {
                 <tr>
                   <td><strong>${esc(cls.name)}</strong></td>
                   <td>${esc(cls.studentCount)}</td>
-                  <td>${esc(cls.quizCount)}</td>
+                  <td>${esc(cls.quizCount === undefined ? "—" : cls.quizCount)}</td>
                   <td class="nowrap">${esc(fmtDate(cls.createdAt))}</td>
                   <td>
                     <div class="row-actions">
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="open-class-members" data-id="${cls.id}">Students</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="open-rename-class" data-id="${cls.id}">Rename</button>
                       <button type="button" class="btn btn-sm btn-danger" data-action="delete-class" data-id="${cls.id}">Delete</button>
                     </div>
@@ -1051,6 +1306,7 @@ function renderTeacherView() {
   if (state.view === "results") return renderTeacherResults();
   if (state.view === "submissions") return renderTeacherSubmissions();
   if (state.view === "announcements") return renderTeacherAnnouncements();
+  if (state.view === "complaints") return renderComplaints();
   return renderTeacherOverview();
 }
 
@@ -1572,11 +1828,141 @@ function renderTeacherAnnouncements() {
     </section>`;
 }
 
+/* Complaints (admin, teacher and student) */
+
+function complaintBadge(status) {
+  if (status === "replied") return badge("Replied", "ok");
+  if (status === "closed") return badge("Closed", "neutral");
+  return badge("Open", "warn");
+}
+
+function renderComplaints() {
+  const isAdmin = state.user.role === "admin";
+  const complaints = state.complaints || [];
+  const stats = state.complaintStats || {
+    total: complaints.length,
+    open: complaints.filter(item => item.status === "open").length,
+    replied: complaints.filter(item => item.status === "replied").length,
+    closed: complaints.filter(item => item.status === "closed").length
+  };
+  const filters = state.complaintFilters;
+
+  return `
+    ${pageHead(isAdmin ? "Support desk" : "Help desk", "Complaints", isAdmin
+      ? "Review concerns from teachers and students, then reply in one place."
+      : "Send a concern to your administrator and follow their reply here.")}
+    <div class="stat-grid">
+      ${statCard("Total", stats.total)}
+      ${statCard("Open", stats.open, "", "gold")}
+      ${statCard("Replied", stats.replied, "", "green")}
+      ${statCard("Closed", stats.closed, "", "purple")}
+    </div>
+    ${isAdmin ? `
+      <section class="panel mt-1">
+        <div class="panel-head"><h2 class="panel-title">Filter complaints</h2></div>
+        <div class="panel-body">
+          <form class="inline-form" data-form="filter-complaints">
+            <div class="field">
+              <label for="complaint-search-q">Search</label>
+              <input id="complaint-search-q" name="q" type="search" maxlength="120" placeholder="Subject, message or sender" value="${esc(filters.q)}">
+            </div>
+            <div class="field">
+              <label for="complaint-status">Status</label>
+              <select id="complaint-status" name="status">
+                ${[["all", "All"], ["open", "Open"], ["replied", "Replied"], ["closed", "Closed"]]
+                  .map(([value, label]) => `<option value="${value}" ${filters.status === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label for="complaint-role">From</label>
+              <select id="complaint-role" name="role">
+                ${[["all", "Everyone"], ["teacher", "Teachers"], ["student", "Students"]]
+                  .map(([value, label]) => `<option value="${value}" ${filters.role === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+            </div>
+            <p class="form-error" data-form-error role="alert"></p>
+            <button type="submit" class="btn btn-primary">Apply filter</button>
+            <button type="button" class="btn" data-action="clear-complaint-filter">Clear</button>
+          </form>
+        </div>
+      </section>` : `
+      <section class="panel mt-1">
+        <div class="panel-head"><h2 class="panel-title">Send a complaint</h2></div>
+        <div class="panel-body">
+          <form class="form" data-form="create-complaint">
+            <div class="form-row">
+              <div class="field">
+                <label for="complaint-subject">Subject</label>
+                <input id="complaint-subject" name="subject" type="text" maxlength="160" required placeholder="Brief summary of your concern">
+              </div>
+              <div class="field">
+                <label for="complaint-category">Category</label>
+                <select id="complaint-category" name="category">
+                  <option value="academic">Academic</option>
+                  <option value="technical">Technical</option>
+                  <option value="facility">Facility</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="complaint-message">Your complaint</label>
+              <textarea id="complaint-message" name="message" maxlength="4000" required placeholder="Describe what happened and how we can help."></textarea>
+            </div>
+            <p class="form-error" data-form-error role="alert"></p>
+            <div><button type="submit" class="btn btn-primary">Submit complaint</button></div>
+          </form>
+        </div>
+      </section>`}
+    <section class="panel mt-1">
+      <div class="panel-head"><h2 class="panel-title">${esc(complaints.length)} complaint${complaints.length === 1 ? "" : "s"}</h2></div>
+      ${complaints.length ? complaints.map(item => `
+        <article class="complaint-item">
+          <div class="complaint-head">
+            <div>
+              <h3>${esc(item.subject)}</h3>
+              <p class="cell-sub">${esc(item.senderName)} · ${esc(ROLE_LABEL[item.senderRole] || item.senderRole)}${item.senderClassName ? ` · ${esc(item.senderClassName)}` : ""} · ${esc(fmtDate(item.createdAt))}</p>
+            </div>
+            <div class="row-actions">
+              ${complaintBadge(item.status)}
+              ${isAdmin ? `
+                <button type="button" class="btn btn-sm btn-ghost" data-action="open-reply-complaint" data-id="${item.id}">Reply</button>
+                <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-complaint-status" data-id="${item.id}" data-status="${item.status === "closed" ? "open" : "closed"}">${item.status === "closed" ? "Reopen" : "Close"}</button>` : ""}
+            </div>
+          </div>
+          <p class="small pre-line">${esc(item.message)}</p>
+          ${item.replies && item.replies.length ? `
+            <div class="reply-list">
+              ${item.replies.map(reply => `
+                <div class="reply-card">
+                  <p class="cell-sub">Reply from ${esc(reply.authorName)} · ${esc(fmtDate(reply.createdAt))}</p>
+                  <p class="small pre-line">${esc(reply.message)}</p>
+                </div>`).join("")}
+            </div>` : `<p class="form-note">Your administrator has not replied yet.</p>`}
+        </article>`).join("") : emptyState("No complaints yet", isAdmin
+          ? "Teacher and student complaints will appear here."
+          : "Use the form above if you need help from your administrator.")}
+    </section>`;
+}
+
 /* Student */
 
 function renderStudentView() {
   if (state.view === "results") return renderStudentResults();
+  if (state.view === "complaints") return renderComplaints();
   return renderStudentDashboard();
+}
+
+async function loadComplaints(filters = state.complaintFilters) {
+  const query = new URLSearchParams();
+  if (filters.q && filters.q.trim()) query.set("q", filters.q.trim());
+  if (filters.status && filters.status !== "all") query.set("status", filters.status);
+  if (filters.role && filters.role !== "all") query.set("role", filters.role);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const result = await api(`/complaints${suffix}`);
+  state.complaints = result.complaints;
+  state.complaintStats = result.stats;
+  return result;
 }
 
 function studentHero() {
@@ -2303,6 +2689,85 @@ function openRenameClass(classId) {
     </div>`);
 }
 
+/** Admin view of a class as a batch of students: add or remove members. */
+function openClassMembers(classId) {
+  const cls = state.data.classes.find(item => Number(item.id) === Number(classId));
+  if (!cls) return;
+  const members = state.data.users.filter(user =>
+    user.role === "student" && Number(user.classId) === Number(classId));
+  const candidates = state.data.users.filter(user =>
+    user.role === "student" && Number(user.classId) !== Number(classId));
+
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Students in ${esc(cls.name)}</h2>
+        <p>${esc(members.length)} student${members.length === 1 ? "" : "s"} in this class.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="member-list">
+        ${members.length ? members.map(user => `
+          <div class="member-row">
+            <div>
+              <strong>${esc(user.name)}</strong>
+              <span class="cell-sub">${esc(user.username)}</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="remove-class-member" data-id="${user.id}" data-class-id="${classId}">Remove</button>
+          </div>`).join("") : `<p class="form-note">This class has no students yet.</p>`}
+      </div>
+      <form class="form mt-1" data-form="add-class-members">
+        <input type="hidden" name="classId" value="${classId}">
+        <div class="field">
+          <label for="member-search">Find students to add</label>
+          <input id="member-search" type="search" data-member-search maxlength="120" placeholder="Search by name or username">
+        </div>
+        <div class="check-grid" data-member-options>
+          ${candidates.length ? candidates.map(user => `
+            <label class="check-item" data-member-option>
+              <input type="checkbox" name="userIds" value="${user.id}">
+              <span><strong>${esc(user.name)}</strong><small>${esc(user.username)}${user.className ? ` · ${esc(user.className)}` : " · unassigned"}</small></span>
+            </label>`).join("") : `<p class="form-note">All student accounts are already in a class.</p>`}
+        </div>
+        <p class="form-note">Removing a student leaves their account active but unassigned, so they cannot see class quizzes until you place them in another class.</p>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add selected students</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openReplyComplaint(id) {
+  const item = state.complaints.find(complaint => complaint.id === id);
+  if (!item) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Reply to complaint</h2>
+        <p>${esc(item.subject)} · ${esc(item.senderName)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="notice"><strong>${esc(item.senderName)} wrote:</strong><p class="small pre-line mt-025">${esc(item.message)}</p></div>
+      <form class="form mt-1" data-form="reply-complaint">
+        <input type="hidden" name="id" value="${item.id}">
+        <div class="field">
+          <label for="reply-message">Your reply</label>
+          <textarea id="reply-message" name="message" maxlength="4000" required placeholder="Explain what you will do or what the user should do next."></textarea>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Send reply</button>
+        </div>
+      </form>
+    </div>`);
+}
+
 function openRenameUser(userId) {
   const target = state.data.users.find(user => user.id === userId);
   if (!target) return;
@@ -2534,6 +2999,47 @@ async function runAction(button) {
     case "open-rename-class":
       openRenameClass(id);
       return;
+    case "open-class-members":
+      openClassMembers(id);
+      return;
+    case "remove-class-member": {
+      const classId = Number(button.dataset.classId);
+      const student = d.users.find(user => user.id === id);
+      if (!student || !window.confirm(`Remove ${student.name} from this class? Their account stays active but unassigned.`)) return;
+      await api(`/admin/classes/${classId}/members/${id}`, { method: "DELETE" });
+      closeModal();
+      await refresh();
+      toast("Student removed from class.", "success");
+      return;
+    }
+    case "clear-user-search":
+      state.userSearch = { q: "", classId: "", results: null };
+      render();
+      return;
+    case "clear-class-search":
+      state.classSearch = { q: "", results: null };
+      render();
+      return;
+    case "clear-complaint-filter":
+      state.complaintFilters = { q: "", status: "all", role: "all" };
+      try {
+        await loadComplaints();
+        render();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
+    case "open-reply-complaint":
+      openReplyComplaint(id);
+      return;
+    case "toggle-complaint-status": {
+      const status = button.dataset.status;
+      await api(`/complaints/${id}/status`, { method: "PATCH", body: { status } });
+      await loadComplaints();
+      render();
+      toast(status === "closed" ? "Complaint closed." : "Complaint reopened.", "success");
+      return;
+    }
     case "open-rename-user":
       openRenameUser(id);
       return;
@@ -2896,6 +3402,98 @@ async function handleSubmit(form) {
     return;
   }
 
+  if (formType === "search-users") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const q = String(data.get("q") || "").trim();
+      const classId = String(data.get("classId") || "");
+      const query = new URLSearchParams();
+      if (q) query.set("q", q);
+      if (classId) query.set("classId", classId);
+      const result = await api(`/admin/search${query.toString() ? `?${query.toString()}` : ""}`);
+      state.userSearch = { q, classId, results: result.users };
+      render();
+      toast(`${result.users.length} account${result.users.length === 1 ? "" : "s"} found.`, "success");
+    });
+    return;
+  }
+
+  if (formType === "search-classes") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const q = String(data.get("q") || "").trim();
+      const query = new URLSearchParams();
+      if (q) query.set("q", q);
+      const result = await api(`/admin/search${query.toString() ? `?${query.toString()}` : ""}`);
+      state.classSearch = { q, results: result.classes };
+      render();
+      toast(`${result.classes.length} class${result.classes.length === 1 ? "" : "es"} found.`, "success");
+    });
+    return;
+  }
+
+  if (formType === "add-class-members") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const classId = Number(data.get("classId"));
+      const userIds = data.getAll("userIds").map(value => Number(value));
+      if (!userIds.length) throw new Error("Select at least one student.");
+      await api(`/admin/classes/${classId}/members`, { method: "POST", body: { userIds } });
+      closeModal();
+      await refresh();
+      toast(`${userIds.length} student${userIds.length === 1 ? "" : "s"} added to the class.`, "success");
+    });
+    return;
+  }
+
+  if (formType === "create-complaint") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      await api("/complaints", {
+        method: "POST",
+        body: {
+          subject: String(data.get("subject") || "").trim(),
+          category: String(data.get("category") || "other"),
+          message: String(data.get("message") || "").trim()
+        }
+      });
+      form.reset();
+      await loadComplaints();
+      render();
+      toast("Complaint submitted. Your administrator can now reply.", "success");
+    });
+    return;
+  }
+
+  if (formType === "filter-complaints") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      state.complaintFilters = {
+        q: String(data.get("q") || "").trim(),
+        status: String(data.get("status") || "all"),
+        role: String(data.get("role") || "all")
+      };
+      await loadComplaints();
+      render();
+    });
+    return;
+  }
+
+  if (formType === "reply-complaint") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      await api(`/complaints/${Number(data.get("id"))}/replies`, {
+        method: "POST",
+        body: { message: String(data.get("message") || "").trim() }
+      });
+      closeModal();
+      await loadComplaints();
+      render();
+      toast("Reply sent.", "success");
+    });
+    return;
+  }
+
   if (formType === "create-subject") {
     await runForm(form, async () => {
       const data = new FormData(form);
@@ -3073,6 +3671,17 @@ document.addEventListener("change", event => {
   applyFormVisibility();
 });
 
+document.addEventListener("input", event => {
+  const input = event.target.closest("[data-member-search]");
+  if (!input) return;
+  const term = input.value.trim().toLowerCase();
+  const body = input.closest(".modal-body");
+  if (!body) return;
+  body.querySelectorAll("[data-member-option]").forEach(option => {
+    option.hidden = Boolean(term) && !option.textContent.toLowerCase().includes(term);
+  });
+});
+
 document.addEventListener("submit", async event => {
   const form = event.target.closest("form[data-form]");
   if (!form) return;
@@ -3082,6 +3691,20 @@ document.addEventListener("submit", async event => {
 
 modalEl.addEventListener("click", event => {
   if (event.target === modalEl) closeModal();
+});
+
+for (const type of ["pointerdown", "keydown", "wheel", "touchstart"]) {
+  document.addEventListener(type, () => noteIdleActivity(), { passive: true });
+}
+window.addEventListener("focus", () => noteIdleActivity(true));
+
+window.addEventListener("storage", event => {
+  if (event.key !== IDLE_STORAGE_KEY || !event.newValue) return;
+  const activity = Number(event.newValue);
+  if (!Number.isFinite(activity) || activity <= idle.lastActivity) return;
+  idle.lastActivity = activity;
+  idle.expiresAt = activity + idle.timeoutMs;
+  hideIdleWarning();
 });
 
 window.addEventListener("beforeunload", event => {
@@ -3094,6 +3717,7 @@ async function init() {
   try {
     const data = await api("/auth/me", { ignoreAuth: true });
     state.user = data.user;
+    await syncIdleSession();
     if (data.user.mustChangePassword) {
       showPassword(true);
       return;

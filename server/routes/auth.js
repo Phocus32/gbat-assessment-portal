@@ -17,6 +17,9 @@ const {
   signSession,
   setSessionCookie,
   clearSessionCookie,
+  sessionSettings,
+  sessionExpiry,
+  touchLastActivity,
   authenticate
 } = require("../security");
 const { asyncHandler, publicUser, toBoolean, logActivity } = require("../utils");
@@ -90,7 +93,8 @@ router.post("/login", loginLimiter, asyncHandler(async (req, res) => {
   await updateDocById("users", user.id, {
     failed_login_attempts: 0,
     locked_until: null,
-    last_login_at: new Date()
+    last_login_at: new Date(),
+    last_activity_at: new Date()
   });
 
   const token = signSession(user);
@@ -106,6 +110,28 @@ router.post("/logout", (req, res) => {
 router.get("/me", authenticate, (req, res) => {
   res.json({ user: req.publicUser });
 });
+
+// Browser countdown settings. Returns the server clock so a device with a
+// skewed clock cannot keep a session alive longer than the server allows.
+router.get("/session", authenticate, (req, res) => {
+  res.json({
+    ...req.sessionSettings,
+    serverNow: new Date().toISOString(),
+    expiresAt: req.sessionExpiresAt
+  });
+});
+
+// Activity heartbeat. Authenticated requests already touch the timestamp, but
+// an explicit ping lets the browser keep a session alive during an exam where
+// the student may be reading without moving the mouse.
+router.post("/activity", authenticate, asyncHandler(async (req, res) => {
+  const touchedAt = await touchLastActivity(req.user);
+  res.json({
+    ok: true,
+    serverNow: new Date(touchedAt).toISOString(),
+    expiresAt: sessionExpiry(req.user.last_activity_at)
+  });
+}));
 
 router.post("/change-password", authenticate, asyncHandler(async (req, res) => {
   const input = changePasswordSchema.parse(req.body);

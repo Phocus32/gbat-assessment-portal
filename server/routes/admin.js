@@ -47,7 +47,9 @@ const {
   subjectCreateSchema,
   subjectUpdateSchema,
   settingsSchema,
-  adminQuizUpdateSchema
+  adminQuizUpdateSchema,
+  classMembersSchema,
+  searchQuerySchema
 } = require("../validation");
 
 const router = express.Router();
@@ -178,6 +180,39 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
   });
 }));
 
+/**
+ * Text search across user names/usernames and class names. Firestore has no
+ * substring query, so this filters the small admin dataset in memory; the
+ * bootstrap endpoint already loads the same collections.
+ */
+router.get("/search", asyncHandler(async (req, res) => {
+  const input = searchQuerySchema.parse(req.query);
+  const [users, classes] = await Promise.all([listAll("users"), listClasses()]);
+  const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+  const term = input.q.toLowerCase();
+
+  const matchedUsers = users
+    .filter(user => {
+      if (input.classId && Number(user.class_id) !== input.classId) return false;
+      if (!term) return true;
+      return [user.name, user.username]
+        .some(value => String(value || "").toLowerCase().includes(term));
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(user => attachClassName(user, classMap));
+
+  const matchedClasses = classes
+    .filter(cls => !term || String(cls.name).toLowerCase().includes(term))
+    .map(cls => ({
+      id: cls.id,
+      name: cls.name,
+      studentCount: users.filter(user =>
+        user.role === "student" && Number(user.class_id) === Number(cls.id)).length
+    }));
+
+  res.json({ query: input.q, users: matchedUsers, classes: matchedClasses });
+}));
+
 router.post("/classes", asyncHandler(async (req, res) => {
   const input = classCreateSchema.parse(req.body);
   if (await findClassByName(input.name)) {
@@ -226,6 +261,47 @@ router.delete("/classes/:id", asyncHandler(async (req, res) => {
 
   await deleteClass(classId);
   await logActivity(req.user, `Deleted class ${target.name}`);
+  return res.json({ ok: true });
+}));
+
+/** Add existing students to a class (the class is the student batch). */
+router.post("/classes/:id/members", asyncHandler(async (req, res) => {
+  const classId = idSchema.parse(req.params.id);
+  const input = classMembersSchema.parse(req.body);
+  const target = await getDocById("classes", classId);
+  if (!target) return res.status(404).json({ error: "Class not found." });
+
+  const users = await getManyByIds("users", input.userIds);
+  if (users.length !== input.userIds.length) {
+    return res.status(400).json({ error: "One or more selected users were not found." });
+  }
+
+  const nonStudents = users.filter(user => user.role !== "student");
+  if (nonStudents.length) {
+    return res.status(400).json({ error: "Only student accounts can be added to a class." });
+  }
+
+  await Promise.all(users.map(user => updateDocById("users", user.id, { class_id: classId })));
+  await logActivity(req.user, `Added ${users.length} student(s) to class ${target.name}`);
+  return res.json({ ok: true, count: users.length, classId });
+}));
+
+/** Remove a student from a class. They stay as an unassigned account. */
+router.delete("/classes/:id/members/:userId", asyncHandler(async (req, res) => {
+  const classId = idSchema.parse(req.params.id);
+  const userId = idSchema.parse(req.params.userId);
+  const [target, user] = await Promise.all([
+    getDocById("classes", classId),
+    getDocById("users", userId)
+  ]);
+  if (!target) return res.status(404).json({ error: "Class not found." });
+  if (!user) return res.status(404).json({ error: "Student not found." });
+  if (Number(user.class_id) !== classId) {
+    return res.status(409).json({ error: "That student is not in this class." });
+  }
+
+  await updateDocById("users", userId, { class_id: null });
+  await logActivity(req.user, `Removed ${user.name} from class ${target.name}`);
   return res.json({ ok: true });
 }));
 
