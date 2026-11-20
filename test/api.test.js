@@ -1334,6 +1334,19 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(meAfterExpiry.body.code, "SESSION_EXPIRED");
   });
 
+  await t.test("student leaderboard ranks their class by best quiz scores", async () => {
+    const leaderboard = await studentAgent.get("/api/student/leaderboard");
+    assert.equal(leaderboard.status, 200);
+    assert.ok(leaderboard.body.leaderboard.length > 0);
+    assert.ok(Array.isArray(leaderboard.body.leaderboard[0].rank));
+    const ranked = leaderboard.body.leaderboard.map(row => row.rank);
+    assert.deepEqual(ranked, [...ranked].sort((a, b) => a - b));
+    assert.ok(leaderboard.body.leaderboard.every(row => typeof row.points === "number"));
+
+    const anonymous = await request(app).get("/api/student/leaderboard");
+    assert.equal(anonymous.status, 401);
+  });
+
   await t.test("teacher and admin can switch practice mode for a quiz", async () => {
     const teacherPatch = await teacherAgent
       .patch(`/api/teacher/quizzes/${quizId}`)

@@ -34,6 +34,7 @@ const NAV_ITEMS = {
   ],
   student: [
     ["dashboard", "Dashboard"],
+    ["leaderboard", "Leaderboard"],
     ["results", "My results"],
     ["complaints", "Complaints"]
   ]
@@ -57,6 +58,7 @@ const state = {
   complaints: [],
   complaintStats: null,
   complaintFilters: { q: "", status: "all", role: "all" },
+  leaderboard: null,
   userSearch: { q: "", classId: "", results: null },
   classSearch: { q: "", results: null }
 };
@@ -92,7 +94,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=13";
+const LOGO_MARK = "/logo-mark.svg?v=14";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -914,6 +916,13 @@ async function navTo(view) {
   if (view === "complaints") {
     try {
       await loadComplaints();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (view === "leaderboard") {
+    try {
+      await loadLeaderboard();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -2096,9 +2105,15 @@ function renderComplaints() {
 /* Student */
 
 function renderStudentView() {
+  if (state.view === "leaderboard") return renderStudentLeaderboard();
   if (state.view === "results") return renderStudentResults();
   if (state.view === "complaints") return renderComplaints();
   return renderStudentDashboard();
+}
+
+async function loadLeaderboard() {
+  state.leaderboard = await api("/student/leaderboard");
+  return state.leaderboard;
 }
 
 async function loadComplaints(filters = state.complaintFilters) {
@@ -2111,6 +2126,74 @@ async function loadComplaints(filters = state.complaintFilters) {
   state.complaints = result.complaints;
   state.complaintStats = result.stats;
   return result;
+}
+
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+function renderStudentLeaderboard() {
+  const data = state.leaderboard;
+  if (!data) {
+    return `${pageHead("Class challenge", "Leaderboard", "Ranking your class by the points earned across quizzes.")}
+      <section class="panel"><div class="panel-body">${emptyState("Loading standings…", "Fetching your class leaderboard.")}</div></section>`;
+  }
+  if (!data.class) {
+    return `${pageHead("Class challenge", "Leaderboard", "See how you stack up against your classmates.")}
+      ${emptyState("No class yet", "You'll appear on the leaderboard once your teacher assigns you to a class.")}`;
+  }
+
+  const rows = data.leaderboard || [];
+  const you = data.you;
+  const quizLabel = `${esc(data.quizCount)} quiz${data.quizCount === 1 ? "" : "zes"} counted`;
+
+  return `
+    ${pageHead("Class challenge", "Leaderboard",
+      `Your class score is the sum of your best result on every quiz in ${esc(data.class.name)}. Improve your best and complete more quizzes to climb.`,
+      `<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`)}
+
+    ${you ? `
+      <div class="you-banner ${you.rank <= 3 ? "you-banner-top" : ""}">
+        <span class="you-banner-mark" aria-hidden="true">${you.rank <= 3 ? MEDALS[you.rank - 1] : `#${you.rank}`}</span>
+        <div>
+          <strong>You're in ${you.rank === 1 ? "first place" : `${ordinal(you.rank)} place`}</strong>
+          <span>${esc(you.points)} points · ${esc(you.quizzesTaken)} of ${esc(data.quizCount)} ${data.quizCount === 1 ? "quiz" : "quizzes"}${you.rank > 1 ? " — the spot above is within reach!" : " — keep the crown!"}</span>
+        </div>
+      </div>` : ""}
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">${esc(data.class.name)} standings</h2>
+        <span class="pill">${quizLabel}</span>
+      </div>
+      ${rows.length ? `
+        <ol class="leaderboard">
+          ${rows.map(row => {
+            const isYou = Number(row.studentId) === Number(state.user.id);
+            return `
+              <li class="leaderboard-row ${isYou ? "is-you" : ""}">
+                <span class="lb-rank ${row.rank <= 3 ? `lb-medal lb-medal-${row.rank}` : ""}" aria-hidden="true">${row.rank <= 3 ? MEDALS[row.rank - 1] : row.rank}</span>
+                <span class="sr-only">Rank ${row.rank}</span>
+                <span class="lb-name">
+                  <strong>${esc(row.name)}${isYou ? `<span class="lb-you">You</span>` : ""}</strong>
+                  <span class="cell-sub">${esc(row.tier)}${row.quizzesTaken ? ` · ${esc(row.quizzesTaken)} quiz${row.quizzesTaken === 1 ? "" : "zes"}` : " · no quizzes yet"}</span>
+                </span>
+                <span class="lb-tier">${badge(row.tier, row.tierTone)}</span>
+                <span class="lb-points"><strong>${esc(row.points)}</strong><span>pts</span></span>
+              </li>`;
+          }).join("")}
+        </ol>` : emptyState("No students yet", "The standings will fill in once your classmates take quizzes.")}
+    </section>`;
+}
+
+function ordinal(value) {
+  const n = Number(value) || 0;
+  const rem = n % 100;
+  if (rem >= 11 && rem <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
 }
 
 function studentHero() {
@@ -2129,6 +2212,7 @@ function studentHero() {
         <p class="hero-subtitle">${esc(message)}</p>
         <div class="hero-actions">
           <button type="button" class="btn btn-primary" data-action="scroll-quizzes">Find a quiz</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="leaderboard">Class leaderboard</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
         </div>
       </div>
@@ -3117,6 +3201,15 @@ async function runAction(button) {
   switch (action) {
     case "nav":
       navTo(button.dataset.view);
+      return;
+    case "refresh-leaderboard":
+      try {
+        await loadLeaderboard();
+        render();
+        focusMainContent();
+      } catch (error) {
+        toast(error.message, "error");
+      }
       return;
     case "scroll-quizzes": {
       const target = document.getElementById("student-quizzes");

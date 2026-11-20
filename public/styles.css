@@ -2696,3 +2696,145 @@ progress::-moz-progress-bar {
 .member-row .cell-sub {
   display: block;
 }
+
+/* Class leaderboard */
+
+.leaderboard {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.9rem 1.15rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.leaderboard-row:last-child {
+  border-bottom: 0;
+}
+
+.leaderboard-row.is-you {
+  background: var(--brand-soft);
+}
+
+.lb-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.lb-medal-1 { background: var(--accent); border-color: var(--accent); color: #5d470f; }
+.lb-medal-2 { background: #ffffff; border-color: var(--line-strong); }
+.lb-medal-3 { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--warn); }
+
+.lb-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 0.05rem;
+}
+
+.lb-name strong {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.lb-you {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  background: var(--brand);
+  color: #ffffff;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lb-tier {
+  display: grid;
+  place-items: center;
+  min-width: 8rem;
+}
+
+.lb-points {
+  display: grid;
+  text-align: right;
+  min-width: 5rem;
+}
+
+.lb-points strong {
+  font-size: 1.25rem;
+  color: var(--brand);
+  letter-spacing: -0.02em;
+}
+
+.lb-points span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.you-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  background: var(--brand-soft);
+}
+
+.you-banner-top {
+  border-width: 2px;
+  background: linear-gradient(135deg, var(--brand-soft), var(--accent-soft));
+}
+
+.you-banner-mark {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.you-banner strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.you-banner span:not(.you-banner-mark) {
+  display: block;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+@media (max-width: 700px) {
+  .lb-tier {
+    display: none;
+  }
+}
