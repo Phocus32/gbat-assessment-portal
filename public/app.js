@@ -61,6 +61,7 @@ const state = {
   complaintFilters: { q: "", status: "all", role: "all" },
   leaderboard: null,
   progress: null,
+  badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
   classSearch: { q: "", results: null }
 };
@@ -96,7 +97,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=15";
+const LOGO_MARK = "/logo-mark.svg?v=16";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -112,7 +113,7 @@ function focusSnapshot() {
     form: element.form && element.form.dataset ? element.form.dataset.form || null : null
   };
   if (element.dataset) {
-    for (const key of ["action", "view", "id", "classId", "index", "position", "status", "mode", "target"]) {
+    for (const key of ["action", "view", "id", "classId", "index", "position", "status", "mode", "target", "filter"]) {
       if (element.dataset[key] !== undefined) snapshot.dataset[key] = element.dataset[key];
     }
   }
@@ -154,6 +155,24 @@ function focusMainContent() {
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
 }
+
+let scrollFrame = null;
+function updateScrollUi() {
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
+  const bar = document.querySelector(".scroll-progress span");
+  if (bar) bar.style.transform = `scaleX(${ratio})`;
+  const topbar = document.querySelector(".topbar");
+  if (topbar) topbar.classList.toggle("is-scrolled", window.scrollY > 8);
+}
+
+window.addEventListener("scroll", () => {
+  if (scrollFrame !== null) return;
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null;
+    updateScrollUi();
+  });
+}, { passive: true });
 
 const SAFE_SVG_TAGS = new Set([
   "svg", "g", "polygon", "polyline", "line", "rect", "circle", "ellipse",
@@ -447,6 +466,64 @@ function animateScoreRings(root) {
   });
 }
 
+/** Animates SVG progress rings with requestAnimationFrame instead of timers. */
+function animateRings(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-ring-percent]").forEach(ring => {
+    const target = Math.max(0, Math.min(100, Number(ring.dataset.ringPercent) || 0));
+    const arc = ring.querySelector(".ring-value");
+    const number = ring.querySelector("[data-ring-number]");
+    if (!arc) return;
+
+    const circumference = Number(arc.getAttribute("stroke-dasharray")) || 2 * Math.PI * 52;
+    const setOffset = value => {
+      arc.style.strokeDashoffset = String(circumference * (1 - value / 100));
+      if (number) number.textContent = `${Math.round(value)}%`;
+    };
+
+    if (prefersReducedMotion()) {
+      setOffset(target);
+      return;
+    }
+
+    setOffset(0);
+    const started = performance.now();
+    const duration = 1050;
+    const frame = now => {
+      if (!ring.isConnected) return;
+      const elapsed = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      setOffset(target * eased);
+      if (elapsed < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/** Reveals cards as they scroll into view, with a small stagger. */
+let revealObserver = null;
+function observeReveals(root) {
+  if (!root) return;
+  const targets = [...root.querySelectorAll("[data-reveal]")];
+  if (!targets.length) return;
+
+  if (prefersReducedMotion() || !("IntersectionObserver" in window)) {
+    targets.forEach(node => node.classList.add("is-visible"));
+    return;
+  }
+
+  if (!revealObserver) {
+    revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        revealObserver.unobserve(entry.target);
+      });
+    }, { threshold: 0.12, rootMargin: "0px 0px -35px 0px" });
+  }
+  targets.forEach(node => revealObserver.observe(node));
+}
+
 function animateAnswerFeedback(entry) {
   if (!entry || prefersReducedMotion()) return;
 
@@ -484,6 +561,8 @@ function openModal(html) {
   if (firstField) requestAnimationFrame(() => firstField.focus({ preventScroll: true }));
   animateEntrance(modalContent);
   animateScoreRings(modalContent);
+  animateRings(modalContent);
+  observeReveals(modalContent);
 }
 
 async function api(path, options = {}) {
@@ -967,6 +1046,7 @@ function renderShell() {
 
   appEl.innerHTML = `
     <div class="app-frame">
+      <div class="scroll-progress" aria-hidden="true"><span></span></div>
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand">
@@ -997,7 +1077,10 @@ function renderShell() {
   if (page) {
     animateEntrance(page);
     if (user.role === "student") animateStats(page);
+    animateRings(page);
+    observeReveals(page);
   }
+  updateScrollUi();
   restoreFocus(snapshot);
 }
 
@@ -2162,9 +2245,32 @@ function syncNewBadges() {
     // Private browsing may block storage; the celebration is optional.
   }
   // First visit just records the baseline so existing badges don't all pop at once.
-  if (stored === null || !fresh.length) return;
+  if (stored !== null && fresh.length) {
+    celebrate();
+    toast(`New badge${fresh.length > 1 ? "s" : ""} unlocked: ${fresh.map(item => item.name).join(", ")}`, "success");
+  }
+  syncClassGoal();
+}
+
+function syncClassGoal() {
+  const goal = state.progress && state.progress.classGoal;
+  if (!goal) return;
+  const key = `lc-class-quest:${state.user ? state.user.id : "anon"}`;
+  let stored = null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch {
+    return;
+  }
+  const current = goal.complete ? "1" : "0";
+  try {
+    localStorage.setItem(key, current);
+  } catch {
+    // Optional celebration only.
+  }
+  if (stored === null || stored === current || current !== "1") return;
   celebrate();
-  toast(`New badge${fresh.length > 1 ? "s" : ""} unlocked: ${fresh.map(item => item.name).join(", ")}`, "success");
+  toast("Class quest complete — brilliant work, everyone!", "success");
 }
 
 async function loadProgress() {
@@ -2175,7 +2281,98 @@ async function loadProgress() {
 
 function progressBar(progressPct, label) {
   const value = Math.max(0, Math.min(100, Number(progressPct) || 0));
-  return `<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}" aria-label="${esc(label)}"><span style="--bar-width: ${value}%"></span></div>`;
+  return `<span class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}" aria-label="${esc(label)}"><span style="--bar-width: ${value}%"></span></span>`;
+}
+
+function progressRing(percent, caption) {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  const circumference = 2 * Math.PI * 52;
+  return `
+    <div class="quest-ring" data-ring-percent="${value}" role="img" aria-label="${esc(caption)}: ${value}%">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+        <circle class="ring-value" cx="60" cy="60" r="52" stroke-dasharray="${circumference.toFixed(2)}" stroke-dashoffset="${circumference.toFixed(2)}"></circle>
+      </svg>
+      <span class="ring-center"><strong data-ring-number>0%</strong><small>of goal</small></span>
+    </div>`;
+}
+
+function classQuestPanel() {
+  const goal = state.progress && state.progress.classGoal;
+  if (!goal) return "";
+  const mine = goal.myContribution || {};
+  const helpers = goal.helpers || [];
+  const initial = name => String(name || "?").trim().charAt(0).toUpperCase();
+
+  return `
+    <section class="panel quest-panel ${goal.complete ? "is-complete" : ""}">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Class quest · ${esc(goal.weekLabel)}</h2>
+          <span class="cell-sub">One class, one goal — every attempt helps.</span>
+        </div>
+        <span class="pill">${goal.complete ? "Quest complete" : `${esc(goal.contributors)}/${esc(goal.classSize || "?")} helping`}</span>
+      </div>
+      <div class="quest-body">
+        ${progressRing(goal.progressPct, "Class average toward goal")}
+        <div class="quest-main">
+          <span class="eyebrow">Our mission</span>
+          <h3>Reach a ${esc(goal.target)}% class average this week</h3>
+          <span class="small muted">${esc(goal.message)} The class is averaging <strong>${esc(goal.average)}%</strong> across <strong>${esc(goal.attempts)}</strong> submitted attempt${goal.attempts === 1 ? "" : "s"}.</span>
+          <div class="quest-milestones" role="list" aria-label="Class quest milestones">
+            ${goal.milestones.map(item => `
+              <span class="quest-milestone ${item.reached ? "is-reached" : ""}" role="listitem">
+                <span class="quest-dot" aria-hidden="true">${item.reached ? "✓" : ""}</span>
+                <span>${esc(item.label)}</span>
+                <small>${esc(item.target)}%</small>
+              </span>`).join("")}
+          </div>
+          <span class="quest-you"><strong>Your part:</strong> ${esc(mine.attempts || 0)} attempt${mine.attempts === 1 ? "" : "s"} · ${esc(mine.average || 0)}% average · ${esc(mine.best || 0)}% best</span>
+        </div>
+        <div class="quest-side">
+          <span class="eyebrow">This week's helpers</span>
+          ${helpers.length ? `
+            <ul class="helper-list">
+              ${helpers.map(item => `
+                <li class="helper ${item.isYou ? "is-you" : ""}">
+                  <span class="helper-avatar" aria-hidden="true">${esc(initial(item.name))}</span>
+                  <span class="helper-copy"><strong>${esc(item.name)}${item.isYou ? " (you)" : ""}</strong><small>${esc(item.attempts)} attempts · ${esc(item.average)}% avg</small></span>
+                </li>`).join("")}
+            </ul>` : `<span class="small muted">No submissions this week yet — you could be first.</span>`}
+          <button type="button" class="btn btn-sm btn-primary" data-action="nav" data-view="dashboard">Do your bit</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function openBadge(id) {
+  const item = ((state.progress && state.progress.badges) || []).find(entry => entry.id === id);
+  if (!item) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">${item.earned ? "Achievement unlocked" : "Achievement to earn"}</span>
+        <h2 id="modal-title">${esc(item.icon)} ${esc(item.name)}</h2>
+        <p>${esc(item.description)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="badge-detail ${item.earned ? "is-earned" : "is-locked"}">
+        <span class="badge-detail-icon" aria-hidden="true">${item.earned ? esc(item.icon) : "🔒"}</span>
+        <div>
+          <strong>${esc(item.progressText)}</strong>
+          ${progressBar(item.progressPct, `${item.name} progress`)}
+          <span class="small muted">${item.earned
+            ? "Nice work — this one is yours."
+            : "Keep taking quizzes to move this bar. Every attempt counts."}</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn" data-action="close-modal">Close</button>
+      <button type="button" class="btn btn-primary" data-action="close-and-learn">Keep learning</button>
+    </div>`);
 }
 
 function renderStudentRewards() {
@@ -2188,6 +2385,8 @@ function renderStudentRewards() {
   const level = p.level || {};
   const streak = p.streak || {};
   const badges = p.badges || [];
+  const shownBadges = badges.filter(item => state.badgeFilter === "all"
+    || (state.badgeFilter === "earned" ? item.earned : !item.earned));
 
   return `
     ${pageHead("Rewards", "Your reward journey",
@@ -2210,6 +2409,8 @@ function renderStudentRewards() {
       </div>
     </section>
 
+    ${classQuestPanel()}
+
     <div class="stat-grid">
       ${statCard("Total XP", level.xp || 0, "From every attempt", "purple")}
       ${statCard("Day streak", streak.current || 0, `Best ${streak.longest || 0} days`, "gold")}
@@ -2223,19 +2424,28 @@ function renderStudentRewards() {
         <span class="pill">${esc(p.badgesEarned || 0)} of ${esc(p.badgeCount || 0)} earned</span>
       </div>
       <div class="panel-body">
-        <div class="badge-grid">
-          ${badges.map(item => `
-            <article class="reward-badge ${item.earned ? "is-earned" : "is-locked"}">
-              <span class="reward-icon" aria-hidden="true">${item.earned ? esc(item.icon) : "🔒"}</span>
-              <div class="reward-copy">
-                <strong>${esc(item.name)}${item.earned ? `<span class="reward-check" aria-label="Earned">✓</span>` : ""}</strong>
-                <p class="small muted">${esc(item.description)}</p>
-                ${item.earned
-                  ? `<span class="reward-earned">Earned</span>`
-                  : `${progressBar(item.progressPct, `${item.name} progress`)}<span class="small muted">${esc(item.progressText)}</span>`}
-              </div>
-            </article>`).join("")}
+        <div class="chip-row" role="group" aria-label="Filter badges">
+          ${[
+            ["all", "All badges", badges.length],
+            ["earned", "Earned", p.badgesEarned || 0],
+            ["locked", "To earn", (p.badgeCount || 0) - (p.badgesEarned || 0)]
+          ].map(([key, label, count]) => `
+            <button type="button" class="chip ${state.badgeFilter === key ? "is-active" : ""}" data-action="filter-badges" data-filter="${key}" aria-pressed="${state.badgeFilter === key}">${label} <span class="chip-count">${esc(count)}</span></button>`).join("")}
         </div>
+        ${shownBadges.length ? `
+          <div class="badge-grid">
+            ${shownBadges.map((item, index) => `
+              <button type="button" class="reward-badge ${item.earned ? "is-earned" : "is-locked"}" data-action="open-badge" data-id="${esc(item.id)}" data-reveal style="--reveal-delay: ${Math.min(index * 45, 270)}ms" aria-label="Details for ${esc(item.name)}">
+                <span class="reward-icon" aria-hidden="true">${item.earned ? esc(item.icon) : "🔒"}</span>
+                <span class="reward-copy">
+                  <strong>${esc(item.name)}${item.earned ? `<span class="reward-check" aria-label="Earned">✓</span>` : ""}</strong>
+                  <span class="small muted">${esc(item.description)}</span>
+                  ${item.earned
+                    ? `<span class="reward-earned">Earned</span>`
+                    : `${progressBar(item.progressPct, `${item.name} progress`)}<span class="small muted">${esc(item.progressText)}</span>`}
+                </span>
+              </button>`).join("")}
+          </div>` : emptyState("Nothing here yet", "Try another filter or keep taking quizzes to earn more badges.")}
       </div>
     </section>
     ${p.nextBadge ? `<p class="form-note mt-16">Next up: <strong>${esc(p.nextBadge.name)}</strong> — ${esc(p.nextBadge.description)} ${esc(p.nextBadge.progressText)}.</p>` : ""}
@@ -2275,6 +2485,17 @@ function renderStudentLeaderboard() {
     ${pageHead("Class challenge", "Leaderboard",
       `Your class score is the sum of your best result on every quiz in ${esc(data.class.name)}. Improve your best and complete more quizzes to climb.`,
       `<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`)}
+
+    ${state.progress && state.progress.classGoal ? `
+      <div class="quest-inline ${state.progress.classGoal.complete ? "is-complete" : ""}">
+        <span class="quest-inline-icon" aria-hidden="true">🤝</span>
+        <div class="quest-inline-copy">
+          <strong>Class quest · ${esc(state.progress.classGoal.average)}% average toward ${esc(state.progress.classGoal.target)}%</strong>
+          <span>${esc(state.progress.classGoal.message)} ${esc(state.progress.classGoal.contributors)} of ${esc(state.progress.classGoal.classSize || "?")} classmates helping this week.</span>
+        </div>
+        ${progressBar(state.progress.classGoal.progressPct, "Class quest progress")}
+        <button type="button" class="btn btn-sm" data-action="nav" data-view="rewards">See quest</button>
+      </div>` : ""}
 
     ${you ? `
       <div class="you-banner ${you.rank <= 3 ? "you-banner-top" : ""}">
@@ -3356,6 +3577,17 @@ async function runAction(button) {
       } catch (error) {
         toast(error.message, "error");
       }
+      return;
+    case "filter-badges":
+      state.badgeFilter = button.dataset.filter || "all";
+      render();
+      return;
+    case "open-badge":
+      openBadge(button.dataset.id);
+      return;
+    case "close-and-learn":
+      closeModal();
+      navTo("dashboard");
       return;
     case "scroll-quizzes": {
       const target = document.getElementById("student-quizzes");

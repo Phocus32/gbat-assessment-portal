@@ -1357,6 +1357,11 @@ test("secured portal end-to-end API flow", async t => {
     assert.ok(progress.body.badges.some(item => item.id === "first-steps" && item.earned));
     assert.ok(progress.body.badgesEarned >= 1);
     assert.equal(typeof progress.body.streak.current, "number");
+    assert.ok(progress.body.classGoal, "class quest should be present for a classed student");
+    assert.equal(typeof progress.body.classGoal.average, "number");
+    assert.ok(progress.body.classGoal.target >= 70);
+    assert.ok(Array.isArray(progress.body.classGoal.milestones));
+    assert.equal(typeof progress.body.classGoal.myContribution.attempts, "number");
 
     const anonymous = await request(app).get("/api/student/progress");
     assert.equal(anonymous.status, 401);

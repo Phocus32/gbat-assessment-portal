@@ -346,9 +346,13 @@ router.get("/progress", asyncHandler(async (req, res) => {
   const studentId = req.user.id;
   const classId = req.user.class_id;
 
-  const [submissions, classQuizzes, settings] = await Promise.all([
+  const hasClass = classId !== null && classId !== undefined;
+  const [submissions, classQuizzes, classSubmissions, members, cls, settings] = await Promise.all([
     listWhere("submissions", "student_id", studentId),
-    classId === null || classId === undefined ? Promise.resolve([]) : listWhere("quizzes", "class_id", classId),
+    hasClass ? listWhere("quizzes", "class_id", classId) : Promise.resolve([]),
+    hasClass ? listWhere("submissions", "class_id", classId) : Promise.resolve([]),
+    hasClass ? listWhere("users", "class_id", classId) : Promise.resolve([]),
+    hasClass ? getDocById("classes", classId) : Promise.resolve(null),
     getSettings()
   ]);
   const quizDocs = await getManyByIds(
@@ -360,6 +364,10 @@ router.get("/progress", asyncHandler(async (req, res) => {
     submissions,
     quizDocs,
     classQuizzes,
+    classSubmissions,
+    members,
+    className: cls ? cls.name : "",
+    studentId,
     passMark: settings.passMark
   }));
 }));

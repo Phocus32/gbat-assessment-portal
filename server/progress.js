@@ -99,6 +99,104 @@ function streakFromDates(keys) {
   return { current, longest, activeToday };
 }
 
+// Monday-start week in UTC so every student sees the same window.
+function weekRange(now = new Date()) {
+  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const weekday = monday.getUTCDay();
+  monday.setUTCDate(monday.getUTCDate() + (weekday === 0 ? -6 : 1 - weekday));
+  const start = monday.getTime();
+  return { start, end: start + 7 * DAY_MS };
+}
+
+function shortDate(stamp) {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" })
+    .format(new Date(stamp));
+}
+
+/**
+ * A cooperative weekly goal: the whole class works toward one average, so
+ * students outside the top of the leaderboard still have a way to contribute.
+ */
+function buildClassGoal({ submissions = [], members = [], className = "", passMark = 70, studentId = null } = {}) {
+  const range = weekRange();
+  const weekly = submissions.filter(item => {
+    const time = new Date(item.submitted_at).getTime();
+    return Number.isFinite(time) && time >= range.start && time < range.end;
+  });
+
+  const target = Math.min(95, Math.max(70, Number(passMark) + 10));
+  const total = weekly.reduce((sum, item) => sum + clampPct(item.pct), 0);
+  const average = weekly.length ? Math.round(total / weekly.length) : 0;
+  const progressPct = Math.min(100, Math.round((average / target) * 100));
+
+  const byStudent = new Map();
+  for (const item of weekly) {
+    const id = Number(item.student_id);
+    const bucket = byStudent.get(id) || { attempts: 0, sum: 0, best: -1 };
+    bucket.attempts += 1;
+    bucket.sum += clampPct(item.pct);
+    bucket.best = Math.max(bucket.best, clampPct(item.pct));
+    byStudent.set(id, bucket);
+  }
+
+  const isActive = user => user.role === "student"
+    && (user.active === undefined || user.active === true || user.active === 1 || user.active === "true");
+  const classSize = members.filter(isActive).length;
+  const memberById = new Map(members.map(user => [Number(user.id), user]));
+
+  const mine = byStudent.get(Number(studentId)) || { attempts: 0, sum: 0, best: -1 };
+  const myContribution = {
+    attempts: mine.attempts,
+    average: mine.attempts ? Math.round(mine.sum / mine.attempts) : 0,
+    best: mine.best < 0 ? 0 : mine.best
+  };
+
+  const helpers = [...byStudent.entries()]
+    .sort((a, b) => b[1].attempts - a[1].attempts || (b[1].sum / b[1].attempts) - (a[1].sum / a[1].attempts))
+    .slice(0, 3)
+    .map(([id, bucket]) => ({
+      studentId: id,
+      name: (memberById.get(id) || {}).name || "Classmate",
+      attempts: bucket.attempts,
+      average: Math.round(bucket.sum / bucket.attempts),
+      isYou: id === Number(studentId)
+    }));
+
+  const complete = average >= target;
+  const remaining = Math.max(0, target - average);
+  const status = complete ? "reached" : remaining <= 10 ? "near" : "building";
+  const message = complete
+    ? "Class quest complete — your class smashed the target!"
+    : !weekly.length
+      ? "Be the first to score this week and get the class moving!"
+      : remaining <= 10
+        ? `Only ${remaining}% away — one good round could finish it!`
+        : `Every quiz helps. ${remaining}% to go!`;
+
+  return {
+    className,
+    weekLabel: `${shortDate(range.start)} – ${shortDate(range.end - DAY_MS)}`,
+    target,
+    average,
+    progressPct,
+    attempts: weekly.length,
+    contributors: byStudent.size,
+    classSize,
+    complete,
+    status,
+    message,
+    remaining,
+    milestones: [
+      { label: "Warm up", target: 50 },
+      { label: "Building", target: 65 },
+      { label: "Strong", target: 80 },
+      { label: "Amazing", target: 95 }
+    ].map(item => ({ ...item, reached: average >= item.target })),
+    myContribution,
+    helpers
+  };
+}
+
 function badge(id, icon, name, description, value, goal) {
   const earned = value >= goal;
   return {
@@ -114,7 +212,16 @@ function badge(id, icon, name, description, value, goal) {
   };
 }
 
-function buildStudentProgress({ submissions = [], quizDocs = [], classQuizzes = [], passMark = 70 }) {
+function buildStudentProgress({
+  submissions = [],
+  quizDocs = [],
+  classQuizzes = [],
+  classSubmissions = [],
+  members = [],
+  className = "",
+  studentId = null,
+  passMark = 70
+}) {
   const chronological = [...submissions].sort(
     (a, b) => new Date(a.submitted_at) - new Date(b.submitted_at)
   );
@@ -195,8 +302,11 @@ function buildStudentProgress({ submissions = [], quizDocs = [], classQuizzes = 
       perfectScores,
       subjects: subjects.size,
       longestStreak: streak.longest
-    }
+    },
+    classGoal: classQuizzes.length
+      ? buildClassGoal({ submissions: classSubmissions, members, className, passMark, studentId })
+      : null
   };
 }
 
-module.exports = { buildStudentProgress, xpForSubmission, levelForXp, streakFromDates };
+module.exports = { buildStudentProgress, buildClassGoal, xpForSubmission, levelForXp, streakFromDates };
