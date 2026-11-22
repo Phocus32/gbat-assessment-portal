@@ -2838,3 +2838,256 @@ progress::-moz-progress-bar {
     display: none;
   }
 }
+
+/* Rewards: XP strip, level card and badge collection */
+
+.xp-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.85rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 0.78rem;
+}
+
+.xp-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.xp-level small {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  opacity: 0.8;
+}
+
+.xp-track {
+  width: 7rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+
+.xp-track span,
+.progress-track span {
+  display: block;
+  width: var(--bar-width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  animation: bar-fill 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.xp-track span {
+  background: #ffe08a;
+}
+
+.xp-caption,
+.xp-streak {
+  white-space: nowrap;
+}
+
+.xp-caption {
+  opacity: 0.9;
+}
+
+.xp-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 800;
+}
+
+.progress-track {
+  height: 0.55rem;
+  margin: 0.55rem 0;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.progress-track span {
+  background: linear-gradient(90deg, var(--brand), #2e8f6b);
+}
+
+.level-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.1rem;
+  margin-bottom: 1rem;
+  padding: 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--surface), var(--brand-soft));
+  box-shadow: var(--shadow-soft);
+}
+
+.level-mark {
+  display: grid;
+  place-items: center;
+  width: 4.2rem;
+  height: 4.2rem;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--sun-ink);
+  font-size: 1.8rem;
+  font-weight: 800;
+}
+
+.level-main h2 {
+  margin: 0.25rem 0 0;
+  font-size: 1.35rem;
+}
+
+.level-main .small {
+  margin: 0;
+}
+
+.level-streak {
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+  min-width: 6.5rem;
+  padding: 0.7rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.level-streak.is-live {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.streak-flame {
+  font-size: 1.5rem;
+}
+
+.level-streak strong {
+  color: var(--warn);
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.level-streak small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
+.reward-badge {
+  display: flex;
+  gap: 0.8rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.reward-badge.is-earned {
+  border-color: var(--brand);
+  background: linear-gradient(135deg, var(--surface), var(--brand-soft));
+}
+
+.reward-badge.is-locked {
+  opacity: 0.78;
+}
+
+.reward-icon {
+  display: grid;
+  place-items: center;
+  width: 2.8rem;
+  height: 2.8rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 1.35rem;
+}
+
+.is-earned .reward-icon {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.reward-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reward-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.92rem;
+}
+
+.reward-copy p {
+  margin: 0.2rem 0;
+}
+
+.reward-check {
+  display: inline-grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--ok);
+  color: #ffffff;
+  font-size: 0.7rem;
+}
+
+.reward-earned {
+  display: inline-block;
+  margin-top: 0.35rem;
+  color: var(--ok);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.reward-copy .progress-track {
+  margin: 0.45rem 0 0.2rem;
+}
+
+.is-locked .progress-track span {
+  background: var(--line-strong);
+}
+
+@media (max-width: 700px) {
+  .level-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .level-streak {
+    grid-column: 1 / -1;
+    grid-template-columns: auto auto auto;
+    align-items: center;
+  }
+
+  .xp-strip {
+    border-radius: var(--radius-sm);
+  }
+
+  .xp-track {
+    width: 5rem;
+  }
+}

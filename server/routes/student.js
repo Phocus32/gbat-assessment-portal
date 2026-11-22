@@ -21,6 +21,7 @@ const {
 } = require("../fdb");
 const { asyncHandler, parseOptions, toBoolean, logActivity } = require("../utils");
 const { getSettings } = require("../settings");
+const { buildStudentProgress } = require("../progress");
 const { idSchema, startAttemptSchema, answerSchema } = require("../validation");
 
 const router = express.Router();
@@ -337,6 +338,30 @@ router.get("/leaderboard", asyncHandler(async (req, res) => {
       quizzesTaken: me.quizzesTaken
     } : null
   });
+}));
+
+// Rewards progress (XP, levels, streaks and badges) derived from the
+// student's existing submission history. No extra collection is maintained.
+router.get("/progress", asyncHandler(async (req, res) => {
+  const studentId = req.user.id;
+  const classId = req.user.class_id;
+
+  const [submissions, classQuizzes, settings] = await Promise.all([
+    listWhere("submissions", "student_id", studentId),
+    classId === null || classId === undefined ? Promise.resolve([]) : listWhere("quizzes", "class_id", classId),
+    getSettings()
+  ]);
+  const quizDocs = await getManyByIds(
+    "quizzes",
+    [...new Set(submissions.map(submission => Number(submission.quiz_id)))]
+  );
+
+  return res.json(buildStudentProgress({
+    submissions,
+    quizDocs,
+    classQuizzes,
+    passMark: settings.passMark
+  }));
 }));
 
 router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {

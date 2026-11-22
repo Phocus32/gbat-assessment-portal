@@ -35,6 +35,7 @@ const NAV_ITEMS = {
   student: [
     ["dashboard", "Dashboard"],
     ["leaderboard", "Leaderboard"],
+    ["rewards", "Rewards"],
     ["results", "My results"],
     ["complaints", "Complaints"]
   ]
@@ -59,6 +60,7 @@ const state = {
   complaintStats: null,
   complaintFilters: { q: "", status: "all", role: "all" },
   leaderboard: null,
+  progress: null,
   userSearch: { q: "", classId: "", results: null },
   classSearch: { q: "", results: null }
 };
@@ -94,7 +96,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=14";
+const LOGO_MARK = "/logo-mark.svg?v=15";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -868,11 +870,19 @@ async function afterLogin(user) {
 }
 
 async function loadData() {
+  if (state.user.role === "student") {
+    const [dashboard, progress] = await Promise.all([
+      api("/student/dashboard"),
+      api("/student/progress").catch(() => null)
+    ]);
+    state.data = dashboard;
+    state.progress = progress;
+    syncNewBadges();
+    return;
+  }
   const path = state.user.role === "admin"
     ? "/admin/bootstrap"
-    : state.user.role === "teacher"
-      ? "/teacher/bootstrap"
-      : "/student/dashboard";
+    : "/teacher/bootstrap";
   state.data = await api(path);
 }
 
@@ -923,6 +933,13 @@ async function navTo(view) {
   if (view === "leaderboard") {
     try {
       await loadLeaderboard();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (view === "rewards") {
+    try {
+      await loadProgress();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -2106,6 +2123,7 @@ function renderComplaints() {
 
 function renderStudentView() {
   if (state.view === "leaderboard") return renderStudentLeaderboard();
+  if (state.view === "rewards") return renderStudentRewards();
   if (state.view === "results") return renderStudentResults();
   if (state.view === "complaints") return renderComplaints();
   return renderStudentDashboard();
@@ -2114,6 +2132,114 @@ function renderStudentView() {
 async function loadLeaderboard() {
   state.leaderboard = await api("/student/leaderboard");
   return state.leaderboard;
+}
+
+const BADGE_STORAGE_PREFIX = "lc-seen-badges:";
+
+function syncNewBadges() {
+  const progress = state.progress;
+  if (!progress || !Array.isArray(progress.badges)) return;
+  const key = `${BADGE_STORAGE_PREFIX}${state.user ? state.user.id : "anon"}`;
+  let stored = null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch {
+    return;
+  }
+  let seen = [];
+  if (stored) {
+    try {
+      seen = JSON.parse(stored) || [];
+    } catch {
+      seen = [];
+    }
+  }
+  const earned = progress.badges.filter(item => item.earned);
+  const fresh = earned.filter(item => !seen.includes(item.id));
+  try {
+    localStorage.setItem(key, JSON.stringify(earned.map(item => item.id)));
+  } catch {
+    // Private browsing may block storage; the celebration is optional.
+  }
+  // First visit just records the baseline so existing badges don't all pop at once.
+  if (stored === null || !fresh.length) return;
+  celebrate();
+  toast(`New badge${fresh.length > 1 ? "s" : ""} unlocked: ${fresh.map(item => item.name).join(", ")}`, "success");
+}
+
+async function loadProgress() {
+  state.progress = await api("/student/progress");
+  syncNewBadges();
+  return state.progress;
+}
+
+function progressBar(progressPct, label) {
+  const value = Math.max(0, Math.min(100, Number(progressPct) || 0));
+  return `<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}" aria-label="${esc(label)}"><span style="--bar-width: ${value}%"></span></div>`;
+}
+
+function renderStudentRewards() {
+  const p = state.progress;
+  if (!p) {
+    return `${pageHead("Rewards", "Your reward journey", "Earn XP, keep your streak alive and collect badges.")}
+      <section class="panel"><div class="panel-body">${emptyState("Loading rewards…", "Counting up your XP and badges.")}</div></section>`;
+  }
+
+  const level = p.level || {};
+  const streak = p.streak || {};
+  const badges = p.badges || [];
+
+  return `
+    ${pageHead("Rewards", "Your reward journey",
+      "Every quiz moves you forward. Build XP, keep your streak alive and fill your trophy case.",
+      `<button type="button" class="btn" data-action="refresh-rewards">Refresh rewards</button>`)}
+
+    <section class="level-card">
+      <div class="level-mark" aria-hidden="true">${esc(level.number || 1)}</div>
+      <div class="level-main">
+        <span class="eyebrow">Level ${esc(level.number || 1)} · ${esc(level.title || "Starter")}</span>
+        <h2>${esc(level.xp || 0)} XP earned</h2>
+        ${progressBar(level.progressPct, `Progress to level ${level.nextNumber || 2}`)}
+        <p class="small muted">${esc(level.xpToNext || 0)} XP to level ${esc(level.nextNumber || 2)} · ${esc(p.nudge || "Keep going!")}</p>
+      </div>
+      <div class="level-streak ${streak.activeToday ? "is-live" : ""}">
+        <span class="streak-flame" aria-hidden="true">🔥</span>
+        <strong>${esc(streak.current || 0)}</strong>
+        <span>day streak</span>
+        <small>Best: ${esc(streak.longest || 0)} days</small>
+      </div>
+    </section>
+
+    <div class="stat-grid">
+      ${statCard("Total XP", level.xp || 0, "From every attempt", "purple")}
+      ${statCard("Day streak", streak.current || 0, `Best ${streak.longest || 0} days`, "gold")}
+      ${statCard("Badges earned", `${p.badgesEarned || 0}/${p.badgeCount || 0}`, "Keep collecting", "green")}
+      ${statCard("Perfect scores", (p.stats && p.stats.perfectScores) || 0, "Bullseyes", "coral")}
+    </div>
+
+    <section class="panel mt-16">
+      <div class="panel-head">
+        <h2 class="panel-title">Badge collection</h2>
+        <span class="pill">${esc(p.badgesEarned || 0)} of ${esc(p.badgeCount || 0)} earned</span>
+      </div>
+      <div class="panel-body">
+        <div class="badge-grid">
+          ${badges.map(item => `
+            <article class="reward-badge ${item.earned ? "is-earned" : "is-locked"}">
+              <span class="reward-icon" aria-hidden="true">${item.earned ? esc(item.icon) : "🔒"}</span>
+              <div class="reward-copy">
+                <strong>${esc(item.name)}${item.earned ? `<span class="reward-check" aria-label="Earned">✓</span>` : ""}</strong>
+                <p class="small muted">${esc(item.description)}</p>
+                ${item.earned
+                  ? `<span class="reward-earned">Earned</span>`
+                  : `${progressBar(item.progressPct, `${item.name} progress`)}<span class="small muted">${esc(item.progressText)}</span>`}
+              </div>
+            </article>`).join("")}
+        </div>
+      </div>
+    </section>
+    ${p.nextBadge ? `<p class="form-note mt-16">Next up: <strong>${esc(p.nextBadge.name)}</strong> — ${esc(p.nextBadge.description)} ${esc(p.nextBadge.progressText)}.</p>` : ""}
+    <p class="form-note">XP rewards every attempt you submit. Your leaderboard points are separate — they use your best result per quiz.</p>`;
 }
 
 async function loadComplaints(filters = state.complaintFilters) {
@@ -2198,6 +2324,7 @@ function ordinal(value) {
 
 function studentHero() {
   const d = state.data;
+  const p = state.progress;
   const firstName = String(state.user.name || "student").trim().split(/\s+/)[0] || "student";
   const open = Number(d.stats.available) || 0;
   const message = open
@@ -2210,9 +2337,19 @@ function studentHero() {
         <span class="hero-eyebrow">Your learning space</span>
         <h1 class="hero-title">Hi ${esc(firstName)}, let's make today count!</h1>
         <p class="hero-subtitle">${esc(message)}</p>
+        ${p ? `
+          <div class="xp-strip">
+            <span class="xp-level"><small>LV</small> ${esc(p.level.number)}</span>
+            <div class="xp-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(p.level.progressPct) || 0}" aria-label="Progress to level ${esc(p.level.nextNumber)}">
+              <span style="--bar-width: ${Number(p.level.progressPct) || 0}%"></span>
+            </div>
+            <span class="xp-caption">${esc(p.level.xp)} XP · ${esc(p.level.xpToNext)} to LV ${esc(p.level.nextNumber)}</span>
+            <span class="xp-streak" title="${esc(p.streak.current)}-day quiz streak">🔥 ${esc(p.streak.current)}</span>
+          </div>` : ""}
         <div class="hero-actions">
           <button type="button" class="btn btn-primary" data-action="scroll-quizzes">Find a quiz</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="leaderboard">Class leaderboard</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="rewards">My rewards</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
         </div>
       </div>
@@ -3205,6 +3342,15 @@ async function runAction(button) {
     case "refresh-leaderboard":
       try {
         await loadLeaderboard();
+        render();
+        focusMainContent();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
+    case "refresh-rewards":
+      try {
+        await loadProgress();
         render();
         focusMainContent();
       } catch (error) {

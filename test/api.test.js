@@ -1338,12 +1338,27 @@ test("secured portal end-to-end API flow", async t => {
     const leaderboard = await studentAgent.get("/api/student/leaderboard");
     assert.equal(leaderboard.status, 200);
     assert.ok(leaderboard.body.leaderboard.length > 0);
-    assert.ok(Array.isArray(leaderboard.body.leaderboard[0].rank));
+    assert.equal(typeof leaderboard.body.leaderboard[0].rank, "number");
     const ranked = leaderboard.body.leaderboard.map(row => row.rank);
     assert.deepEqual(ranked, [...ranked].sort((a, b) => a - b));
     assert.ok(leaderboard.body.leaderboard.every(row => typeof row.points === "number"));
 
     const anonymous = await request(app).get("/api/student/leaderboard");
+    assert.equal(anonymous.status, 401);
+  });
+
+  await t.test("student rewards derive XP, level, streak and badges from submissions", async () => {
+    const progress = await studentAgent.get("/api/student/progress");
+    assert.equal(progress.status, 200);
+    assert.ok(progress.body.level.xp > 0);
+    assert.equal(typeof progress.body.level.number, "number");
+    assert.ok(progress.body.level.xpToNext >= 0);
+    assert.ok(Array.isArray(progress.body.badges));
+    assert.ok(progress.body.badges.some(item => item.id === "first-steps" && item.earned));
+    assert.ok(progress.body.badgesEarned >= 1);
+    assert.equal(typeof progress.body.streak.current, "number");
+
+    const anonymous = await request(app).get("/api/student/progress");
     assert.equal(anonymous.status, 401);
   });
 
