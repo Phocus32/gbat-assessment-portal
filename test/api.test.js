@@ -24,6 +24,7 @@ const {
   createUser: insertUser,
   getDocById,
   updateDocById,
+  countQuizItems,
   close
 } = require("../server/fdb");
 const { ensureSettings } = require("../server/settings");
@@ -1473,8 +1474,21 @@ test("secured portal end-to-end API flow", async t => {
   });
 
   await t.test("teacher and admin can switch practice mode for a quiz", async () => {
+    const created = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Practice Toggle Check",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 10,
+        questionIds: [firstQuestionId]
+      });
+    assert.equal(created.status, 201);
+    const practiceQuizId = created.body.quiz.id;
+
     const teacherPatch = await teacherAgent
-      .patch(`/api/teacher/quizzes/${quizId}`)
+      .patch(`/api/teacher/quizzes/${practiceQuizId}`)
       .set(CSRF)
       .send({ allowPractice: false });
     assert.equal(teacherPatch.status, 200);
@@ -1482,35 +1496,178 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(teacherPatch.body.quiz.allowPractice, false);
 
     const deniedForOtherTeacher = await teacher2Agent
-      .patch(`/api/teacher/quizzes/${quizId}`)
+      .patch(`/api/teacher/quizzes/${practiceQuizId}`)
       .set(CSRF)
       .send({ allowPractice: true });
     assert.equal(deniedForOtherTeacher.status, 404);
 
     const dashboard = await studentAgent.get("/api/student/dashboard");
     assert.equal(dashboard.status, 200);
-    const shownQuiz = dashboard.body.quizzes.find(item => Number(item.id) === Number(quizId));
+    const shownQuiz = dashboard.body.quizzes.find(item => Number(item.id) === Number(practiceQuizId));
     assert.equal(shownQuiz.allowPractice, false);
 
     const blocked = await studentAgent
-      .post(`/api/student/quizzes/${quizId}/start`)
+      .post(`/api/student/quizzes/${practiceQuizId}/start`)
       .set(CSRF)
       .send({ mode: "Practice" });
     assert.equal(blocked.status, 403);
     assert.match(blocked.body.error, /Practice is disabled/);
 
     const adminPatch = await adminAgent
-      .patch(`/api/admin/quizzes/${quizId}`)
+      .patch(`/api/admin/quizzes/${practiceQuizId}`)
       .set(CSRF)
       .send({ allowPractice: true });
     assert.equal(adminPatch.status, 200);
     assert.equal(adminPatch.body.quiz.allowPractice, true);
 
     const started = await studentAgent
-      .post(`/api/student/quizzes/${quizId}/start`)
+      .post(`/api/student/quizzes/${practiceQuizId}/start`)
       .set(CSRF)
       .send({ mode: "Practice" });
     assert.equal(started.status, 200);
     assert.equal(started.body.mode, "Practice");
+  });
+
+  await t.test("teachers can delete selected bank questions without changing published quizzes", async () => {
+    const createQuestion = async (questionText, solution) => {
+      const created = await teacherAgent
+        .post("/api/teacher/questions")
+        .set(CSRF)
+        .send({
+          questionText,
+          subjectId: mathsSubjectId,
+          options: ["24", "25", "26", "27"],
+          correctIndex: 1,
+          solution
+        });
+      assert.equal(created.status, 201);
+      return created.body.question.id;
+    };
+
+    const first = await createQuestion("What is 18 plus 7?", "Add 18 and 7 to get 25.");
+    const second = await createQuestion("What is 9 plus 16?", "Add 9 and 16 to get 25.");
+    const kept = await createQuestion("What is 40 minus 12?", "Subtract 12 from 40 to get 28.");
+
+    const quiz = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Bank Copy Check",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 10,
+        questionIds: [kept]
+      });
+    assert.equal(quiz.status, 201);
+    const copyQuizId = quiz.body.quiz.id;
+    const itemsBefore = await countQuizItems(copyQuizId);
+    assert.equal(itemsBefore, 1);
+
+    const denied = await teacher2Agent
+      .delete("/api/teacher/questions")
+      .set(CSRF)
+      .send({ ids: [first] });
+    assert.equal(denied.status, 403);
+
+    const empty = await teacherAgent
+      .delete("/api/teacher/questions")
+      .set(CSRF)
+      .send({ ids: [] });
+    assert.equal(empty.status, 400);
+
+    const missing = await teacherAgent
+      .delete("/api/teacher/questions")
+      .set(CSRF)
+      .send({ ids: [first, 999999] });
+    assert.equal(missing.status, 404);
+    assert.ok(await getDocById("questions", first));
+
+    const deleted = await teacherAgent
+      .delete("/api/teacher/questions")
+      .set(CSRF)
+      .send({ ids: [first, second] });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(deleted.body, { ok: true, deleted: 2 });
+    assert.equal(await getDocById("questions", first), null);
+    assert.equal(await getDocById("questions", second), null);
+    assert.ok(await getDocById("questions", kept));
+    assert.equal(await countQuizItems(copyQuizId), itemsBefore);
+
+    const bootstrap = await teacherAgent.get("/api/teacher/bootstrap");
+    assert.equal(bootstrap.status, 200);
+    const questionIds = bootstrap.body.questions.map(item => Number(item.id));
+    assert.ok(!questionIds.includes(Number(first)));
+    assert.ok(!questionIds.includes(Number(second)));
+    assert.ok(questionIds.includes(Number(kept)));
+  });
+
+  await t.test("deleting a quiz keeps its copied questions and stored submissions", async () => {
+    const created = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is 11 plus 4?",
+        subjectId: mathsSubjectId,
+        options: ["14", "15", "16", "17"],
+        correctIndex: 1,
+        solution: "Add 11 and 4 to get 15."
+      });
+    assert.equal(created.status, 201);
+    const questionId = created.body.question.id;
+
+    const quiz = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Deletion Check",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 10,
+        questionIds: [questionId]
+      });
+    assert.equal(quiz.status, 201);
+    const deleteQuizId = quiz.body.quiz.id;
+    const itemsBefore = await countQuizItems(deleteQuizId);
+    assert.equal(itemsBefore, 1);
+
+    const started = await studentAgent
+      .post(`/api/student/quizzes/${deleteQuizId}/start`)
+      .set(CSRF)
+      .send({ mode: "Exam" });
+    assert.equal(started.status, 200);
+
+    const answered = await studentAgent
+      .post(`/api/student/attempts/${started.body.attemptId}/answer`)
+      .set(CSRF)
+      .send({ position: 0, chosenIndex: 1 });
+    assert.equal(answered.status, 200);
+
+    const submitted = await studentAgent
+      .post(`/api/student/attempts/${started.body.attemptId}/submit`)
+      .set(CSRF)
+      .send({});
+    assert.equal(submitted.status, 201);
+    const submissionId = submitted.body.submissionId;
+
+    const deleted = await teacherAgent
+      .delete(`/api/teacher/quizzes/${deleteQuizId}`)
+      .set(CSRF);
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(deleted.body, { ok: true, deleted: true });
+
+    const stored = await getDocById("quizzes", deleteQuizId);
+    assert.equal(stored.is_deleted, true);
+    assert.equal(stored.is_open, false);
+    assert.equal(await countQuizItems(deleteQuizId), itemsBefore);
+
+    const submission = await studentAgent.get(`/api/submissions/${submissionId}`);
+    assert.equal(submission.status, 200);
+
+    const dashboard = await studentAgent.get("/api/student/dashboard");
+    assert.equal(dashboard.status, 200);
+    assert.ok(!dashboard.body.quizzes.some(item => Number(item.id) === Number(deleteQuizId)));
+
+    const results = await teacherAgent.get(`/api/teacher/quizzes/${deleteQuizId}/results`);
+    assert.equal(results.status, 404);
   });
 });

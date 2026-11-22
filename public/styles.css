@@ -1426,6 +1426,33 @@ tbody tr:hover {
   gap: 0.8rem;
 }
 
+.question-preview-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.question-select {
+  display: inline-flex;
+  align-items: center;
+  padding-top: 0.15rem;
+  cursor: pointer;
+}
+
+.question-select input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+.question-preview.is-selected {
+  background: var(--danger-soft);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
 .question-preview h3 {
   font-size: 0.92rem;
   font-weight: 750;

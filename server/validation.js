@@ -175,6 +175,14 @@ const classMembersSchema = z.object({
     .refine(ids => new Set(ids).size === ids.length, "Duplicate students are not allowed.")
 });
 
+const questionIdsSchema = z.object({
+  ids: z
+    .array(z.coerce.number().int().positive())
+    .min(1, "Select at least one question.")
+    .max(200, "Too many questions selected.")
+    .refine(ids => new Set(ids).size === ids.length, "Duplicate questions are not allowed.")
+});
+
 const searchQuerySchema = z.object({
   q: z.string().trim().max(120, "Search term is too long.").optional().default(""),
   classId: z.coerce.number().int().positive().optional()
@@ -230,6 +238,7 @@ module.exports = {
   complaintReplySchema,
   complaintStatusSchema,
   classMembersSchema,
+  questionIdsSchema,
   searchQuerySchema,
   settingsSchema
 };

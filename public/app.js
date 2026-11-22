@@ -101,7 +101,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=17";
+const LOGO_MARK = "/logo-mark.svg?v=18";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -318,6 +318,34 @@ function groupSubmissionsByClass(submissions, perClass = Infinity) {
       if (b.id === "unassigned") return -1;
       return String(a.name).localeCompare(String(b.name));
     });
+}
+
+function selectedQuestionIds() {
+  return [...document.querySelectorAll("[data-question-select]:checked")]
+    .map(input => Number(input.value))
+    .filter(id => Number.isInteger(id) && id > 0);
+}
+
+function updateQuestionSelectionUi() {
+  const boxes = [...document.querySelectorAll("[data-question-select]")];
+  if (!boxes.length) return;
+  const selected = boxes.filter(box => box.checked);
+  for (const box of boxes) {
+    const card = box.closest(".question-preview");
+    if (card) card.classList.toggle("is-selected", box.checked);
+  }
+
+  const deleteButton = document.querySelector("[data-action='delete-selected-questions']");
+  if (deleteButton) {
+    deleteButton.disabled = selected.length === 0;
+    const count = deleteButton.querySelector("[data-question-selected-count]");
+    if (count) count.textContent = String(selected.length);
+  }
+
+  const selectAll = document.querySelector("[data-action='toggle-question-selection']");
+  if (selectAll) {
+    selectAll.textContent = selected.length === boxes.length ? "Clear selection" : "Select all";
+  }
 }
 
 function letter(index) {
@@ -1147,6 +1175,7 @@ function renderShell() {
     </div>`;
   labelTableCells(appEl);
   applyFormVisibility();
+  updateQuestionSelectionUi();
 
   const page = appEl.querySelector(".page");
   if (page) {
@@ -1724,7 +1753,13 @@ function renderTeacherQuestions() {
   const d = state.data;
   const groups = groupQuestionsBySubject(d.questions);
   return `
-    ${pageHead("Question bank", "Questions", "Every quiz receives a copy of its questions, so the bank stays stable after publishing.")}
+    ${pageHead("Question bank", "Questions",
+      "Every quiz receives a copy of its questions, so the bank stays stable after publishing.",
+      d.questions.length ? `
+        <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-question-selection">Select all</button>
+        <button type="button" class="btn btn-sm btn-danger" data-action="delete-selected-questions" disabled>
+          Delete selected <span data-question-selected-count>0</span>
+        </button>` : "")}
     <section class="panel">
       <div class="panel-head">
         <h2 class="panel-title">Bulk upload questions</h2>
@@ -1825,9 +1860,14 @@ function renderTeacherQuestions() {
           ${group.questions.map(question => `
             <article class="question-preview">
               <div class="question-preview-head">
-                <div>
-                  <h3>${esc(question.text)}</h3>
-                  <span class="cell-sub">Added ${esc(fmtDate(question.createdAt))}</span>
+                <div class="question-preview-title">
+                  <label class="question-select">
+                    <input type="checkbox" data-question-select value="${question.id}" aria-label="Select question ${question.id} for deletion">
+                  </label>
+                  <div>
+                    <h3>${esc(question.text)}</h3>
+                    <span class="cell-sub">Added ${esc(fmtDate(question.createdAt))}</span>
+                  </div>
                 </div>
                 <button type="button" class="btn btn-sm btn-danger" data-action="delete-question" data-id="${question.id}">Delete</button>
               </div>
@@ -1976,7 +2016,7 @@ function renderTeacherQuizzes() {
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-shuffle" data-id="${quiz.id}">${quiz.shuffleQuestions ? "Fixed order" : "Shuffle"}</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-practice" data-id="${quiz.id}">${quiz.allowPractice !== false ? "Disable practice" : "Enable practice"}</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="edit-schedule" data-id="${quiz.id}">Schedule</button>
-                      <button type="button" class="btn btn-sm btn-danger" data-action="archive-quiz" data-id="${quiz.id}">Archive</button>
+                      <button type="button" class="btn btn-sm btn-danger" data-action="delete-quiz" data-id="${quiz.id}">Delete</button>
                     </div>
                   </td>
                 </tr>`).join("")}
@@ -3963,6 +4003,24 @@ async function runAction(button) {
       toast("Account deleted.", "success");
       return;
     }
+    case "toggle-question-selection": {
+      const boxes = [...document.querySelectorAll("[data-question-select]")];
+      if (!boxes.length) return;
+      const selectAll = boxes.some(box => !box.checked);
+      for (const box of boxes) box.checked = selectAll;
+      updateQuestionSelectionUi();
+      return;
+    }
+    case "delete-selected-questions": {
+      const ids = selectedQuestionIds();
+      if (!ids.length) return;
+      const label = `${ids.length} question${ids.length === 1 ? "" : "s"}`;
+      if (!window.confirm(`Delete ${label} from your bank? Quizzes already created keep their own copy.`)) return;
+      await api("/teacher/questions", { method: "DELETE", body: { ids } });
+      await refresh();
+      toast(`${label} deleted.`, "success");
+      return;
+    }
     case "delete-question": {
       if (!window.confirm("Delete this question from your bank? Quizzes already created keep their own copy.")) return;
       await api(`/teacher/questions/${id}`, { method: "DELETE" });
@@ -4004,13 +4062,13 @@ async function runAction(button) {
     case "edit-schedule":
       openQuizSchedule(id);
       return;
-    case "archive-quiz": {
+    case "delete-quiz": {
       const target = d.quizzes.find(quiz => quiz.id === id);
       if (!target) return;
-      if (!window.confirm(`Archive "${target.title}"? Students will no longer see it, but submissions are kept.`)) return;
+      if (!window.confirm(`Delete "${target.title}"? Students will no longer see it, but submissions and results are kept.`)) return;
       await api(`/teacher/quizzes/${id}`, { method: "DELETE" });
       await refresh();
-      toast("Quiz archived. Submissions remain available.", "success");
+      toast("Quiz deleted. Submissions and results are preserved.", "success");
       return;
     }
     case "view-quiz-results": {
@@ -4552,6 +4610,11 @@ document.addEventListener("click", async event => {
 });
 
 document.addEventListener("change", async event => {
+  if (event.target.closest("[data-question-select]")) {
+    updateQuestionSelectionUi();
+    return;
+  }
+
   const classSelect = event.target.closest("[data-leaderboard-class]");
   if (classSelect) {
     state.leaderboardClassId = Number(classSelect.value) || null;

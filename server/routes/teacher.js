@@ -36,6 +36,7 @@ const {
   idSchema,
   questionCreateSchema,
   questionImportSchema,
+  questionIdsSchema,
   quizCreateSchema,
   quizUpdateSchema,
   announcementCreateSchema,
@@ -461,19 +462,48 @@ router.post("/questions", asyncHandler(async (req, res) => {
   });
 }));
 
+// Deleting from the bank never touches published quizzes: each quiz receives
+// its own copy of the questions when it is created.
+async function checkQuestionsDeletable(ids, user) {
+  const targets = await getManyByIds("questions", ids);
+  if (targets.length !== ids.length) {
+    return { error: { status: 404, message: "Question not found." } };
+  }
+
+  const byId = new Map(targets.map(target => [Number(target.id), target]));
+  for (const id of ids) {
+    const target = byId.get(Number(id));
+    if (Number(target.created_by) !== Number(user.id)) {
+      return { error: { status: 403, message: "You can only delete questions that you created." } };
+    }
+  }
+
+  const subjectIds = [...new Set(targets.map(target => Number(target.subject_id)).filter(Boolean))];
+  if (subjectIds.length && !(await assertSubjectsAllowed(subjectIds, user))) {
+    return { error: { status: 403, message: "That subject is no longer assigned to your account." } };
+  }
+
+  return { targets };
+}
+
+router.delete("/questions", asyncHandler(async (req, res) => {
+  const input = questionIdsSchema.parse(req.body);
+  const { error } = await checkQuestionsDeletable(input.ids, req.user);
+  if (error) return res.status(error.status).json({ error: error.message });
+
+  for (const id of input.ids) await deleteDocById("questions", id);
+  await logActivity(req.user, `Deleted ${input.ids.length} question${input.ids.length === 1 ? "" : "s"} from the bank`);
+  return res.json({ ok: true, deleted: input.ids.length });
+}));
+
 router.delete("/questions/:id", asyncHandler(async (req, res) => {
   const questionId = idSchema.parse(req.params.id);
-  const target = await getDocById("questions", questionId);
-  if (!target) return res.status(404).json({ error: "Question not found." });
-  if (Number(target.created_by) !== Number(req.user.id)) {
-    return res.status(403).json({ error: "You can only delete questions that you created." });
-  }
-  if (target.subject_id && !(await assertSubjectsAllowed([target.subject_id], req.user))) {
-    return res.status(403).json({ error: "That subject is no longer assigned to your account." });
-  }
+  const { error } = await checkQuestionsDeletable([questionId], req.user);
+  if (error) return res.status(error.status).json({ error: error.message });
+
   await deleteDocById("questions", questionId);
   await logActivity(req.user, "Deleted a question from the bank");
-  return res.json({ ok: true });
+  return res.json({ ok: true, deleted: 1 });
 }));
 
 function shufflePositions(positions) {
@@ -686,8 +716,8 @@ router.delete("/quizzes/:id", asyncHandler(async (req, res) => {
   if (!quiz) return res.status(404).json({ error: "Quiz not found." });
 
   await updateDocById("quizzes", quizId, { is_deleted: true, is_open: false });
-  await logActivity(req.user, `Archived quiz "${quiz.title}"`);
-  return res.json({ ok: true });
+  await logActivity(req.user, `Deleted quiz "${quiz.title}"`);
+  return res.json({ ok: true, deleted: true });
 }));
 
 router.get("/quizzes/:id/results", asyncHandler(async (req, res) => {
