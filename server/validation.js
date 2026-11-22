@@ -183,6 +183,8 @@ const questionIdsSchema = z.object({
     .refine(ids => new Set(ids).size === ids.length, "Duplicate questions are not allowed.")
 });
 
+const leaderboardPeriodSchema = z.enum(["week", "last-week", "all"]).default("week");
+
 const searchQuerySchema = z.object({
   q: z.string().trim().max(120, "Search term is too long.").optional().default(""),
   classId: z.coerce.number().int().positive().optional()
@@ -239,6 +241,7 @@ module.exports = {
   complaintStatusSchema,
   classMembersSchema,
   questionIdsSchema,
+  leaderboardPeriodSchema,
   searchQuerySchema,
   settingsSchema
 };

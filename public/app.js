@@ -64,6 +64,7 @@ const state = {
   leaderboard: null,
   leaderboardClassId: null,
   leaderboardClasses: [],
+  leaderboardPeriod: "week",
   progress: null,
   badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
@@ -101,7 +102,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=18";
+const LOGO_MARK = "/logo-mark.svg?v=20";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -154,6 +155,17 @@ function focusMainContent() {
   const main = document.getElementById("main-content");
   if (!main) return;
   requestAnimationFrame(() => main.focus({ preventScroll: true }));
+}
+
+// A full render replaces the focused control. Deferring to the next frame lets
+// any focus queued by navigation run first, then puts keyboard focus back on
+// the selector the learner just changed.
+function focusAfterRender(selector) {
+  requestAnimationFrame(() => {
+    const target = document.querySelector(selector);
+    if (target) target.focus({ preventScroll: true });
+    else focusMainContent();
+  });
 }
 
 function scrollToTop() {
@@ -1039,6 +1051,7 @@ async function afterLogin(user) {
   state.leaderboard = null;
   state.leaderboardClassId = null;
   state.leaderboardClasses = [];
+  state.leaderboardPeriod = "week";
   await syncIdleSession();
   if (user.mustChangePassword) {
     showPassword(true);
@@ -2365,15 +2378,19 @@ function renderStudentView() {
 }
 
 async function loadLeaderboard() {
+  const period = encodeURIComponent(state.leaderboardPeriod || "week");
   if (state.user.role === "student") {
-    state.leaderboard = await api("/student/leaderboard");
+    state.leaderboard = await api(`/student/leaderboard?period=${period}`);
     return state.leaderboard;
   }
 
-  const query = state.leaderboardClassId
-    ? `?classId=${encodeURIComponent(state.leaderboardClassId)}`
-    : "";
-  const result = await api(`/leaderboard${query}`);
+  const query = [
+    state.leaderboardClassId
+      ? `classId=${encodeURIComponent(state.leaderboardClassId)}`
+      : "",
+    `period=${period}`
+  ].filter(Boolean).join("&");
+  const result = await api(`/leaderboard?${query}`);
   state.leaderboardClasses = result.classes || [];
   if (!state.leaderboardClassId && state.leaderboardClasses.length) {
     state.leaderboardClassId = result.class
@@ -2632,19 +2649,32 @@ async function loadComplaints(filters = state.complaintFilters) {
 }
 
 const MEDALS = ["🥇", "🥈", "🥉"];
+const LEADERBOARD_PERIODS = [
+  { value: "week", label: "This week" },
+  { value: "last-week", label: "Last week" },
+  { value: "all", label: "All time" }
+];
+
+function leaderboardPeriodLabel(key) {
+  return LEADERBOARD_PERIODS.find(item => item.value === key)?.label || "This week";
+}
 
 function renderLeaderboard() {
   const data = state.leaderboard;
   const isStaff = Boolean(state.user && state.user.role !== "student");
   const eyebrow = isStaff ? "Insight" : "Class challenge";
   const title = isStaff ? "Class leaderboard" : "Leaderboard";
+  const period = data?.period || {
+    key: state.leaderboardPeriod || "week",
+    label: leaderboardPeriodLabel(state.leaderboardPeriod)
+  };
 
   if (!data) {
-    return `${pageHead(eyebrow, title, "Ranking classes by the points earned across quizzes.")}
+    return `${pageHead(eyebrow, title, "Ranking classes by exam points earned across quizzes.")}
       <section class="panel"><div class="panel-body">${emptyState("Loading standings…", "Fetching the class leaderboard.")}</div></section>`;
   }
   if (!data.class) {
-    return `${pageHead(eyebrow, title, "See how students are doing across their quizzes.")}
+    return `${pageHead(eyebrow, title, "See how students are doing across their exams.")}
       ${emptyState(isStaff ? "No classes to show" : "No class yet",
         isStaff
           ? "Classes appear here once a teacher creates a quiz for them."
@@ -2654,6 +2684,13 @@ function renderLeaderboard() {
   const rows = data.leaderboard || [];
   const you = isStaff ? null : data.you;
   const quizLabel = `${esc(data.quizCount)} quiz${data.quizCount === 1 ? "" : "zes"} counted`;
+  const periodPicker = `<label class="lb-picker">
+      <span class="sr-only">Leaderboard period</span>
+      <select data-leaderboard-period>
+        ${LEADERBOARD_PERIODS.map(item => `
+          <option value="${item.value}" ${item.value === period.key ? "selected" : ""}>${item.label}</option>`).join("")}
+      </select>
+    </label>`;
   const classPicker = isStaff && data.classes && data.classes.length
     ? `<label class="lb-picker">
         <span class="sr-only">Choose a class</span>
@@ -2663,10 +2700,10 @@ function renderLeaderboard() {
         </select>
       </label>`
     : "";
-  const actions = `${classPicker}<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`;
+  const actions = `${periodPicker}${classPicker}<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`;
   const subtitle = isStaff
-    ? `Ranked by each student's best score on every non-archived quiz in ${data.class.name}.`
-    : `Your class score is the sum of your best result on every quiz in ${data.class.name}. Improve your best and complete more quizzes to climb.`;
+    ? `Ranked by each student's best Exam score on every non-archived quiz in ${data.class.name} (${esc(period.label)}). Practice attempts are not ranked.`
+    : `Your class score is the sum of your best Exam result on each quiz (${esc(period.label)}). Practice attempts earn XP, not leaderboard points.`;
 
   return `
     ${pageHead(eyebrow, title, subtitle, actions)}
@@ -2683,36 +2720,41 @@ function renderLeaderboard() {
       </div>` : ""}
 
     ${you ? `
-      <div class="you-banner ${you.rank <= 3 ? "you-banner-top" : ""}">
-        <span class="you-banner-mark" aria-hidden="true">${you.rank <= 3 ? MEDALS[you.rank - 1] : `#${you.rank}`}</span>
+      <div class="you-banner ${you.rank && you.rank <= 3 ? "you-banner-top" : ""}">
+        <span class="you-banner-mark" aria-hidden="true">${you.rank ? (you.rank <= 3 ? MEDALS[you.rank - 1] : `#${you.rank}`) : "—"}</span>
         <div>
-          <strong>You're in ${you.rank === 1 ? "first place" : `${ordinal(you.rank)} place`}</strong>
-          <span>${esc(you.points)} points · ${esc(you.quizzesTaken)} of ${esc(data.quizCount)} ${data.quizCount === 1 ? "quiz" : "quizzes"}${you.rank > 1 ? " — the spot above is within reach!" : " — keep the crown!"}</span>
+          <strong>${you.rank ? `You're in ${you.rank === 1 ? "first place" : `${ordinal(you.rank)} place`}` : "No ranked exam scores yet"}</strong>
+          <span>${you.rank
+            ? `${esc(you.points)} points · ${esc(you.quizzesTaken)} of ${esc(data.quizCount)} ${data.quizCount === 1 ? "quiz" : "quizzes"} · avg ${esc(you.averagePct)}%`
+            : "Complete an exam to enter the standings. Practice attempts do not count."}</span>
         </div>
       </div>` : ""}
 
     <section class="panel">
       <div class="panel-head">
         <h2 class="panel-title">${esc(data.class.name)} standings</h2>
-        <span class="pill">${quizLabel}</span>
+        <span class="pill">${esc(period.label)} · ${quizLabel}</span>
       </div>
       ${rows.length ? `
         <ol class="leaderboard">
           ${rows.map(row => {
             const isYou = !isStaff && Number(row.studentId) === Number(state.user.id);
+            const isUnranked = row.rank === null || row.rank === undefined;
             return `
-              <li class="leaderboard-row ${isYou ? "is-you" : ""}">
-                <span class="lb-rank ${row.rank <= 3 ? `lb-medal lb-medal-${row.rank}` : ""}" aria-hidden="true">${row.rank <= 3 ? MEDALS[row.rank - 1] : row.rank}</span>
-                <span class="sr-only">Rank ${row.rank}</span>
+              <li class="leaderboard-row ${isYou ? "is-you" : ""} ${isUnranked ? "is-unranked" : ""}">
+                <span class="lb-rank ${!isUnranked && row.rank <= 3 ? `lb-medal lb-medal-${row.rank}` : ""}" aria-hidden="true">${isUnranked ? "—" : row.rank <= 3 ? MEDALS[row.rank - 1] : row.rank}</span>
+                <span class="sr-only">${isUnranked ? "Not ranked yet" : `Rank ${row.rank}`}</span>
                 <span class="lb-name">
                   <strong>${esc(row.name)}${isYou ? `<span class="lb-you">You</span>` : ""}</strong>
-                  <span class="cell-sub">${esc(row.tier)}${row.quizzesTaken ? ` · ${esc(row.quizzesTaken)} quiz${row.quizzesTaken === 1 ? "" : "zes"}` : " · no quizzes yet"}</span>
+                  <span class="cell-sub">${isUnranked
+                    ? "No exam scores this period"
+                    : `${esc(row.tier)} · ${esc(row.quizzesTaken)} quiz${row.quizzesTaken === 1 ? "" : "zes"} · avg ${esc(row.averagePct)}%`}</span>
                 </span>
                 <span class="lb-tier">${badge(row.tier, row.tierTone)}</span>
                 <span class="lb-points"><strong>${esc(row.points)}</strong><span>pts</span></span>
               </li>`;
           }).join("")}
-        </ol>` : emptyState("No students yet", "The standings will fill in once students take quizzes.")}
+        </ol>` : emptyState("No students yet", "The standings will fill in once students take exams.")}
     </section>`;
 }
 
@@ -4615,15 +4657,26 @@ document.addEventListener("change", async event => {
     return;
   }
 
+  const periodSelect = event.target.closest("[data-leaderboard-period]");
+  if (periodSelect) {
+    state.leaderboardPeriod = periodSelect.value;
+    try {
+      await loadLeaderboard();
+      render();
+      focusAfterRender("[data-leaderboard-period]");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
   const classSelect = event.target.closest("[data-leaderboard-class]");
   if (classSelect) {
     state.leaderboardClassId = Number(classSelect.value) || null;
     try {
       await loadLeaderboard();
       render();
-      const nextSelect = document.querySelector("[data-leaderboard-class]");
-      if (nextSelect) nextSelect.focus({ preventScroll: true });
-      else focusMainContent();
+      focusAfterRender("[data-leaderboard-class]");
     } catch (error) {
       toast(error.message, "error");
     }

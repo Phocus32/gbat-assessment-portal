@@ -23,7 +23,12 @@ const { getSettings } = require("../settings");
 const { buildStudentProgress } = require("../progress");
 const { buildClassLeaderboard } = require("../leaderboard");
 const { effectiveDeadline, quizWindow, whenText } = require("../quiz-window");
-const { idSchema, startAttemptSchema, answerSchema } = require("../validation");
+const {
+  idSchema,
+  startAttemptSchema,
+  answerSchema,
+  leaderboardPeriodSchema
+} = require("../validation");
 
 const router = express.Router();
 
@@ -270,13 +275,15 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
 
 // Class leaderboard. The ranking logic lives in server/leaderboard.js so staff
 // can see the same standings without widening student-route permissions.
+// Exam submissions only; practice attempts stay out of the score.
 router.get("/leaderboard", asyncHandler(async (req, res) => {
+  const periodKey = leaderboardPeriodSchema.parse(req.query.period);
   const classId = req.user.class_id;
   const cls = classId === null || classId === undefined
     ? null
     : await getDocById("classes", classId);
 
-  return res.json(await buildClassLeaderboard(cls, req.user.id));
+  return res.json(await buildClassLeaderboard(cls, req.user.id, periodKey));
 }));
 
 // Rewards progress (XP, levels, streaks and badges) derived from the

@@ -24,6 +24,7 @@ const {
   createUser: insertUser,
   getDocById,
   updateDocById,
+  insertDoc,
   countQuizItems,
   close
 } = require("../server/fdb");
@@ -1407,14 +1408,26 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(meAfterExpiry.body.code, "SESSION_EXPIRED");
   });
 
-  await t.test("student leaderboard ranks their class by best quiz scores", async () => {
+  await t.test("student leaderboard defaults to this week's exam standings", async () => {
     const leaderboard = await studentAgent.get("/api/student/leaderboard");
     assert.equal(leaderboard.status, 200);
+    assert.equal(leaderboard.body.period.key, "week");
     assert.ok(leaderboard.body.leaderboard.length > 0);
-    assert.equal(typeof leaderboard.body.leaderboard[0].rank, "number");
-    const ranked = leaderboard.body.leaderboard.map(row => row.rank);
+
+    const ranks = leaderboard.body.leaderboard.map(row => row.rank);
+    const ranked = ranks.filter(rank => rank !== null);
     assert.deepEqual(ranked, [...ranked].sort((a, b) => a - b));
+    const firstUnranked = ranks.indexOf(null);
+    assert.ok(firstUnranked === -1 || ranks.slice(firstUnranked).every(rank => rank === null));
     assert.ok(leaderboard.body.leaderboard.every(row => typeof row.points === "number"));
+
+    const allTime = await studentAgent.get("/api/student/leaderboard?period=all");
+    assert.equal(allTime.status, 200);
+    assert.equal(allTime.body.period.key, "all");
+    assert.equal(allTime.body.period.start, null);
+
+    const invalid = await studentAgent.get("/api/student/leaderboard?period=today");
+    assert.equal(invalid.status, 400);
 
     const anonymous = await request(app).get("/api/student/leaderboard");
     assert.equal(anonymous.status, 401);
@@ -1451,6 +1464,136 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(studentBlocked.status, 403);
     const anonymous = await request(app).get("/api/leaderboard");
     assert.equal(anonymous.status, 401);
+  });
+
+  await t.test("leaderboard scores only exams in the selected UTC period", async () => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const createdClass = await adminAgent
+      .post("/api/admin/classes")
+      .set(CSRF)
+      .send({ name: "Leaderboard Period Lab" });
+    assert.equal(createdClass.status, 201);
+    const periodClassId = createdClass.body.class.id;
+
+    const examStudentId = await insertDoc("users", {
+      name: "Period Exam",
+      username: "period.exam",
+      password_hash: "",
+      role: "student",
+      class_id: periodClassId,
+      subject_ids: [],
+      active: true,
+      must_change_password: false,
+      token_version: 0,
+      created_at: new Date()
+    });
+    const practiceStudentId = await insertDoc("users", {
+      name: "Period Practice",
+      username: "period.practice",
+      password_hash: "",
+      role: "student",
+      class_id: periodClassId,
+      subject_ids: [],
+      active: true,
+      must_change_password: false,
+      token_version: 0,
+      created_at: new Date()
+    });
+
+    const quizIds = [];
+    for (const title of ["Period This Week", "Period Last Week", "Period Older"]) {
+      quizIds.push(await insertDoc("quizzes", {
+        title,
+        class_id: periodClassId,
+        teacher_id: teacher1Id,
+        subject_id: mathsSubjectId,
+        minutes: 10,
+        is_open: true,
+        is_deleted: false,
+        created_at: new Date()
+      }));
+    }
+
+    const now = new Date();
+    const thisMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    thisMonday.setUTCDate(thisMonday.getUTCDate() - ((thisMonday.getUTCDay() + 6) % 7));
+    const lastMonday = new Date(thisMonday.getTime() - 7 * dayMs);
+    const olderMonday = new Date(lastMonday.getTime() - 7 * dayMs);
+    const midweek = monday => new Date(monday.getTime() + dayMs + 60 * 60 * 1000);
+
+    const addSubmission = (studentId, quizIndex, mode, pct, submittedAt) => insertDoc("submissions", {
+      quiz_id: quizIds[quizIndex],
+      class_id: periodClassId,
+      student_id: studentId,
+      mode,
+      pct,
+      submitted_at: submittedAt,
+      created_at: submittedAt
+    });
+
+    await addSubmission(examStudentId, 0, "Exam", 80, new Date());
+    await addSubmission(examStudentId, 1, "Exam", 70, midweek(lastMonday));
+    await addSubmission(examStudentId, 2, "Exam", 60, midweek(olderMonday));
+    await addSubmission(examStudentId, 0, "Practice", 100, new Date());
+    await addSubmission(practiceStudentId, 0, "Practice", 100, new Date());
+    await addSubmission(practiceStudentId, 1, "Practice", 100, midweek(lastMonday));
+    await addSubmission(practiceStudentId, 2, "Practice", 100, midweek(olderMonday));
+
+    const fetchPeriod = async period => {
+      const suffix = period ? `&period=${period}` : "";
+      const response = await adminAgent.get(`/api/leaderboard?classId=${periodClassId}${suffix}`);
+      assert.equal(response.status, 200);
+      return response.body;
+    };
+    const rowFor = (body, studentId) =>
+      body.leaderboard.find(row => Number(row.studentId) === Number(studentId));
+
+    const week = await fetchPeriod();
+    assert.equal(week.period.key, "week");
+    const weekStart = new Date(week.period.start);
+    assert.equal(weekStart.getUTCDay(), 1);
+    assert.equal(weekStart.getUTCHours(), 0);
+    assert.equal(weekStart.getUTCMinutes(), 0);
+    assert.equal(week.leaderboard.length, 2);
+
+    const weekExam = rowFor(week, examStudentId);
+    const weekPractice = rowFor(week, practiceStudentId);
+    assert.equal(weekExam.rank, 1);
+    assert.equal(weekExam.points, 80);
+    assert.equal(weekExam.quizzesTaken, 1);
+    assert.equal(weekExam.averagePct, 80);
+    assert.equal(weekPractice.rank, null);
+    assert.equal(weekPractice.points, 0);
+    assert.equal(weekPractice.quizzesTaken, 0);
+    assert.equal(week.leaderboard[0].studentId, examStudentId);
+
+    const lastWeek = await fetchPeriod("last-week");
+    assert.equal(lastWeek.period.key, "last-week");
+    assert.equal(new Date(lastWeek.period.start).getTime(), weekStart.getTime() - 7 * dayMs);
+    const lastWeekExam = rowFor(lastWeek, examStudentId);
+    const lastWeekPractice = rowFor(lastWeek, practiceStudentId);
+    assert.equal(lastWeekExam.rank, 1);
+    assert.equal(lastWeekExam.points, 70);
+    assert.equal(lastWeekPractice.rank, null);
+    assert.equal(lastWeekPractice.points, 0);
+
+    const allTime = await fetchPeriod("all");
+    assert.equal(allTime.period.key, "all");
+    assert.equal(allTime.period.start, null);
+    assert.equal(allTime.period.end, null);
+    assert.equal(allTime.quizCount, 3);
+    const allTimeExam = rowFor(allTime, examStudentId);
+    const allTimePractice = rowFor(allTime, practiceStudentId);
+    assert.equal(allTimeExam.rank, 1);
+    assert.equal(allTimeExam.points, 210);
+    assert.equal(allTimeExam.quizzesTaken, 3);
+    assert.equal(allTimeExam.averagePct, 70);
+    assert.equal(allTimePractice.rank, null);
+    assert.equal(allTimePractice.points, 0);
+
+    const invalidStaffPeriod = await adminAgent
+      .get(`/api/leaderboard?classId=${periodClassId}&period=today`);
+    assert.equal(invalidStaffPeriod.status, 400);
   });
 
   await t.test("student rewards derive XP, level, streak and badges from submissions", async () => {

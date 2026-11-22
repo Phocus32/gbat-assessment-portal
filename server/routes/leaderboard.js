@@ -3,7 +3,12 @@
 const express = require("express");
 const { getDocById, listClasses, listWhere } = require("../fdb");
 const { asyncHandler } = require("../utils");
-const { buildClassLeaderboard } = require("../leaderboard");
+const { leaderboardPeriodSchema } = require("../validation");
+const {
+  buildClassLeaderboard,
+  resolveLeaderboardPeriod,
+  serializePeriod
+} = require("../leaderboard");
 
 const router = express.Router();
 
@@ -31,10 +36,17 @@ async function visibleClasses(user) {
 // Read-only staff view. Students keep their own class-only endpoint; teachers
 // may only select classes they own a quiz for, and admins may select any class.
 router.get("/", asyncHandler(async (req, res) => {
+  const periodKey = leaderboardPeriodSchema.parse(req.query.period);
   const classes = await visibleClasses(req.user);
   const classOptions = classes.map(cls => ({ id: Number(cls.id), name: cls.name }));
   if (!classes.length) {
-    return res.json({ class: null, quizCount: 0, leaderboard: [], classes: classOptions });
+    return res.json({
+      class: null,
+      quizCount: 0,
+      period: serializePeriod(resolveLeaderboardPeriod(periodKey)),
+      leaderboard: [],
+      classes: classOptions
+    });
   }
 
   const requested = req.query.classId;
@@ -53,7 +65,7 @@ router.get("/", asyncHandler(async (req, res) => {
   }
 
   return res.json({
-    ...(await buildClassLeaderboard(selected, null)),
+    ...(await buildClassLeaderboard(selected, null, periodKey)),
     classes: classOptions
   });
 }));
