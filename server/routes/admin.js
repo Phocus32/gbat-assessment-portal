@@ -30,6 +30,7 @@ const {
 } = require("../subjects");
 const { getSettings, saveSettings } = require("../settings");
 const { hashPassword } = require("../security");
+const { quizWindow } = require("../quiz-window");
 const { buildStudentTemplate } = require("../excel");
 const { importStudentsFromWorkbook, ExcelInputError } = require("../student-import");
 const {
@@ -148,21 +149,27 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
       createdAt: cls.created_at
     })),
     subjects,
-    quizzes: liveQuizzes.map((quiz, index) => ({
-      id: quiz.id,
-      title: quiz.title,
-      classId: quiz.class_id,
-      className: classMap.get(Number(quiz.class_id)) || null,
-      teacherName: teacherNames.get(Number(quiz.teacher_id)) || "Unknown",
-      subjectId: quiz.subject_id || null,
-      subjectName: subjectNames.get(Number(quiz.subject_id)) || quiz.subject || "General",
-      minutes: Number(quiz.minutes),
-      questionCount: questionCounts[index],
-      isOpen: quiz.is_open === true || quiz.is_open === 1,
-      allowPractice: quiz.allow_practice !== false,
-      approved: quiz.approved !== false,
-      createdAt: quiz.created_at
-    })),
+    quizzes: liveQuizzes.map((quiz, index) => {
+      const window = quizWindow(quiz);
+      return {
+        id: quiz.id,
+        title: quiz.title,
+        classId: quiz.class_id,
+        className: classMap.get(Number(quiz.class_id)) || null,
+        teacherName: teacherNames.get(Number(quiz.teacher_id)) || "Unknown",
+        subjectId: quiz.subject_id || null,
+        subjectName: subjectNames.get(Number(quiz.subject_id)) || quiz.subject || "General",
+        minutes: Number(quiz.minutes),
+        questionCount: questionCounts[index],
+        isOpen: quiz.is_open === true || quiz.is_open === 1,
+        allowPractice: quiz.allow_practice !== false,
+        approved: quiz.approved !== false,
+        startAt: window.startAt,
+        endAt: window.endAt,
+        windowState: window.state,
+        createdAt: quiz.created_at
+      };
+    }),
     logs: logs.map(log => ({
       id: log.id,
       actorName: log.actor_name,

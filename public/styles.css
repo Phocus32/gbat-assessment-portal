@@ -3505,3 +3505,76 @@ button.reward-badge:hover {
   box-shadow: var(--shadow-soft);
   background: rgba(247, 250, 248, 0.96);
 }
+
+/* Class-grouped submissions, quiz windows and staff leaderboard picker */
+
+.class-submission-groups {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.class-submission-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface-soft);
+}
+
+.class-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.class-group-head strong {
+  font-size: 0.86rem;
+}
+
+.class-group-more {
+  margin: 0.5rem 0.75rem 0.65rem;
+}
+
+.submission-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  align-items: start;
+  gap: 1rem;
+}
+
+.schedule-cell {
+  min-width: 12rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.quiz-schedule {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.lb-picker {
+  display: inline-flex;
+  align-items: center;
+}
+
+.lb-picker select {
+  min-width: 11rem;
+}
+
+@media (max-width: 700px) {
+  .schedule-cell {
+    min-width: 0;
+  }
+
+  .lb-picker,
+  .lb-picker select {
+    width: 100%;
+  }
+}

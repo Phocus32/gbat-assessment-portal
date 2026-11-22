@@ -19,6 +19,7 @@ const {
 const { getSettings } = require("../settings");
 const { subjectIdsOf, assertSubjectsAllowed, subjectMap } = require("../subjects");
 const { buildStudentTemplate } = require("../excel");
+const { assertQuizWindow, effectiveDeadline, quizWindow, readDate } = require("../quiz-window");
 const {
   QuestionImportError,
   buildQuestionTemplate,
@@ -320,21 +321,27 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     questions: questions
       .sort((a, b) => Number(b.id) - Number(a.id))
       .map(question => mapQuestion({ ...question, creator_name: req.user.name })),
-    quizzes: quizzes.map(quiz => ({
-      id: quiz.id,
-      title: quiz.title,
-      classId: quiz.class_id,
-      className: classMap.get(Number(quiz.class_id)) || null,
-      subjectId: quiz.subject_id || null,
-      subjectName: allSubjects.get(Number(quiz.subject_id)) || quiz.subject || "General",
-      minutes: Number(quiz.minutes),
-      shuffleQuestions: toBoolean(quiz.shuffle_questions),
-      allowPractice: quiz.allow_practice !== false,
-      isOpen: toBoolean(quiz.is_open),
-      approved: quiz.approved !== false,
-      questionCount: questionCountMap.get(Number(quiz.id)) || 0,
-      createdAt: quiz.created_at
-    })),
+    quizzes: quizzes.map(quiz => {
+      const window = quizWindow(quiz);
+      return {
+        id: quiz.id,
+        title: quiz.title,
+        classId: quiz.class_id,
+        className: classMap.get(Number(quiz.class_id)) || null,
+        subjectId: quiz.subject_id || null,
+        subjectName: allSubjects.get(Number(quiz.subject_id)) || quiz.subject || "General",
+        minutes: Number(quiz.minutes),
+        shuffleQuestions: toBoolean(quiz.shuffle_questions),
+        allowPractice: quiz.allow_practice !== false,
+        isOpen: toBoolean(quiz.is_open),
+        approved: quiz.approved !== false,
+        startAt: window.startAt,
+        endAt: window.endAt,
+        windowState: window.state,
+        questionCount: questionCountMap.get(Number(quiz.id)) || 0,
+        createdAt: quiz.created_at
+      };
+    }),
     classes: classes.map(cls => ({ id: cls.id, name: cls.name })),
     manageableClasses: classes
       .filter(cls => ownedClassIds.has(Number(cls.id)))
@@ -357,6 +364,9 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
         id: submission.id,
         quizId: submission.quiz_id,
         quizTitle: quiz.title || "",
+        classId: submission.class_id === null || submission.class_id === undefined
+          ? null
+          : Number(submission.class_id),
         className: classMap.get(Number(submission.class_id)) || null,
         mode: submission.mode,
         score: Number(submission.score),
@@ -530,6 +540,9 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
   const names = await subjectMap();
   const subjectName = names.get(Number(input.subjectId)) || "General";
   const approved = !settings.requireApproval;
+  assertQuizWindow(input.startAt, input.endAt);
+  const startAt = input.startAt || null;
+  const endAt = input.endAt || null;
   const quizId = await createQuizWithItems(
     {
       title: input.title,
@@ -543,6 +556,8 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
       is_open: true,
       is_deleted: false,
       approved,
+      start_at: startAt,
+      end_at: endAt,
       created_at: new Date()
     },
     ordered.map(question => ({
@@ -566,14 +581,18 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
       minutes: input.minutes,
       shuffleQuestions: input.shuffleQuestions,
       allowPractice: input.allowPractice !== false,
-      approved
+      approved,
+      startAt,
+      endAt
     },
     id: quizId,
     title: input.title,
     classId: input.classId,
     minutes: input.minutes,
     shuffleQuestions: input.shuffleQuestions,
-    allowPractice: input.allowPractice !== false
+    allowPractice: input.allowPractice !== false,
+    startAt,
+    endAt
   });
 }));
 
@@ -611,6 +630,28 @@ router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
     patch.allow_practice = Boolean(input.allowPractice);
     actions.push(`${input.allowPractice ? "Enabled" : "Disabled"} practice for "${quiz.title}"`);
   }
+  if (input.startAt !== undefined || input.endAt !== undefined) {
+    const nextStart = input.startAt === undefined ? readDate(quiz.start_at) : input.startAt;
+    const nextEnd = input.endAt === undefined ? readDate(quiz.end_at) : input.endAt;
+    assertQuizWindow(nextStart, nextEnd);
+
+    if (input.startAt !== undefined) patch.start_at = input.startAt;
+    if (input.endAt !== undefined) patch.end_at = input.endAt;
+    actions.push(`Updated the schedule for "${quiz.title}"`);
+
+    if (input.endAt !== undefined) {
+      const inProgress = (await listWhere("attempts", "quiz_id", quizId))
+        .filter(attempt => attempt.status === "in_progress"
+          && attempt.mode === "Exam"
+          && attempt.expires_at instanceof Date);
+      for (const attempt of inProgress) {
+        const deadline = effectiveDeadline({ end_at: input.endAt }, attempt.expires_at);
+        if (deadline.getTime() !== attempt.expires_at.getTime()) {
+          await updateDocById("attempts", attempt.id, { expires_at: deadline });
+        }
+      }
+    }
+  }
 
   await updateDocById("quizzes", quizId, patch);
   for (const action of actions) await logActivity(req.user, action);
@@ -618,18 +659,23 @@ router.patch("/quizzes/:id", asyncHandler(async (req, res) => {
   const allowPractice = input.allowPractice === undefined
     ? quiz.allow_practice !== false
     : input.allowPractice;
+  const updatedWindow = quizWindow({ ...quiz, ...patch });
   return res.json({
     isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen,
     shuffleQuestions: input.shuffleQuestions === undefined
       ? toBoolean(quiz.shuffle_questions)
       : input.shuffleQuestions,
     allowPractice,
+    startAt: updatedWindow.startAt,
+    endAt: updatedWindow.endAt,
     quiz: {
       id: quiz.id,
       title: quiz.title,
       shuffleQuestions: input.shuffleQuestions === undefined ? toBoolean(quiz.shuffle_questions) : input.shuffleQuestions,
       allowPractice,
-      isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen
+      isOpen: input.isOpen === undefined ? toBoolean(quiz.is_open) : input.isOpen,
+      startAt: updatedWindow.startAt,
+      endAt: updatedWindow.endAt
     }
   });
 }));

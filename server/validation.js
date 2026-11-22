@@ -25,6 +25,14 @@ const nameSchema = z
 
 const idSchema = z.coerce.number().int().positive();
 
+// Blank form fields are treated as "no restriction". Preserve `undefined` on
+// updates so a toggle does not accidentally clear an existing schedule.
+const quizDateSchema = z.preprocess(
+  value => value === "" ? null : value,
+  z.iso.datetime().nullable().optional()
+    .transform(value => value === undefined ? undefined : value ? new Date(value) : null)
+);
+
 const loginSchema = z.object({
   username: z.string().trim().min(1, "Enter your username.").max(80),
   password: z.string().min(1, "Enter your password.").max(72)
@@ -89,20 +97,34 @@ const quizCreateSchema = z.object({
   minutes: z.coerce.number().int().min(1, "Duration must be at least 1 minute.").max(240, "Duration cannot exceed 240 minutes."),
   shuffleQuestions: z.boolean().default(false),
   allowPractice: z.boolean().default(true),
+  startAt: quizDateSchema,
+  endAt: quizDateSchema,
   questionIds: z
     .array(z.coerce.number().int().positive())
     .min(1, "Select at least one question.")
     .max(200, "A quiz cannot contain more than 200 questions.")
     .refine(ids => new Set(ids).size === ids.length, "Duplicate questions are not allowed.")
-});
+}).refine(
+  value => !value.startAt || !value.endAt || value.endAt.getTime() > value.startAt.getTime(),
+  { message: "Quiz end time must be after the begin time.", path: ["endAt"] }
+);
 
 const quizUpdateSchema = z.object({
   isOpen: z.boolean().optional(),
   shuffleQuestions: z.boolean().optional(),
-  allowPractice: z.boolean().optional()
+  allowPractice: z.boolean().optional(),
+  startAt: quizDateSchema,
+  endAt: quizDateSchema
 }).refine(
-  value => value.isOpen !== undefined || value.shuffleQuestions !== undefined || value.allowPractice !== undefined,
+  value => value.isOpen !== undefined
+    || value.shuffleQuestions !== undefined
+    || value.allowPractice !== undefined
+    || value.startAt !== undefined
+    || value.endAt !== undefined,
   { message: "No changes were supplied." }
+).refine(
+  value => !value.startAt || !value.endAt || value.endAt.getTime() > value.startAt.getTime(),
+  { message: "Quiz end time must be after the begin time.", path: ["endAt"] }
 );
 
 const adminQuizUpdateSchema = z.object({

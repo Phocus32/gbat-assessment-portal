@@ -17,6 +17,7 @@ const NAV_ITEMS = {
     ["subjects", "Subjects"],
     ["classes", "Classes"],
     ["users", "Users"],
+    ["leaderboard", "Leaderboard"],
     ["quizzes", "Quizzes"],
     ["activity", "Activity"],
     ["complaints", "Complaints"],
@@ -27,6 +28,7 @@ const NAV_ITEMS = {
     ["questions", "Question bank"],
     ["quizzes", "Quizzes"],
     ["students", "Students"],
+    ["leaderboard", "Leaderboard"],
     ["results", "Results"],
     ["submissions", "Submissions"],
     ["announcements", "Announcements"],
@@ -60,6 +62,8 @@ const state = {
   complaintStats: null,
   complaintFilters: { q: "", status: "all", role: "all" },
   leaderboard: null,
+  leaderboardClassId: null,
+  leaderboardClasses: [],
   progress: null,
   badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
@@ -97,7 +101,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=16";
+const LOGO_MARK = "/logo-mark.svg?v=17";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -246,6 +250,74 @@ function fmtDate(value) {
     ? { day: "numeric", month: "short", year: "numeric" }
     : { day: "numeric", month: "short" });
   return `${day}, ${time}`;
+}
+
+function fmtDateTime(value) {
+  if (!value) return "Anytime";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const includeYear = date.getFullYear() !== new Date().getFullYear();
+  return `${date.toLocaleDateString([], {
+    day: "numeric",
+    month: "short",
+    ...(includeYear ? { year: "numeric" } : {})
+  })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function scheduleText(quiz) {
+  if (!quiz || (!quiz.startAt && !quiz.endAt)) return "Anytime";
+  if (quiz.startAt && quiz.endAt) {
+    return `${fmtDateTime(quiz.startAt)} → ${fmtDateTime(quiz.endAt)}`;
+  }
+  return quiz.startAt ? `From ${fmtDateTime(quiz.startAt)}` : `Until ${fmtDateTime(quiz.endAt)}`;
+}
+
+function toDatetimeLocal(value) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = number => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function datetimeLocalToIso(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error("Enter a valid date and time.");
+  return date.toISOString();
+}
+
+function groupSubmissionsByClass(submissions, perClass = Infinity) {
+  const classes = (state.data && (state.data.manageableClasses || state.data.classes)) || [];
+  const groups = new Map();
+  for (const cls of classes) {
+    groups.set(Number(cls.id), {
+      id: Number(cls.id),
+      name: cls.name,
+      rows: [],
+      total: 0
+    });
+  }
+
+  for (const item of submissions) {
+    const numericId = item.classId === null || item.classId === undefined ? null : Number(item.classId);
+    const key = numericId === null ? "unassigned" : numericId;
+    let group = groups.get(key);
+    if (!group) {
+      group = { id: key, name: item.className || "Unassigned", rows: [], total: 0 };
+      groups.set(key, group);
+    }
+    group.total += 1;
+    if (group.rows.length < perClass) group.rows.push(item);
+  }
+
+  return [...groups.values()]
+    .filter(group => group.total > 0)
+    .sort((a, b) => {
+      if (a.id === "unassigned") return 1;
+      if (b.id === "unassigned") return -1;
+      return String(a.name).localeCompare(String(b.name));
+    });
 }
 
 function letter(index) {
@@ -936,6 +1008,9 @@ function renderPassword() {
 
 async function afterLogin(user) {
   state.user = user;
+  state.leaderboard = null;
+  state.leaderboardClassId = null;
+  state.leaderboardClasses = [];
   await syncIdleSession();
   if (user.mustChangePassword) {
     showPassword(true);
@@ -1134,6 +1209,7 @@ function pageHead(eyebrow, title, subtitle, actions = "") {
 function renderAdminView() {
   if (state.view === "subjects") return renderAdminSubjects();
   if (state.view === "classes") return renderAdminClasses();
+  if (state.view === "leaderboard") return renderLeaderboard();
   if (state.view === "users") return renderAdminUsers();
   if (state.view === "quizzes") return renderAdminQuizzes();
   if (state.view === "activity") return renderAdminActivity();
@@ -1361,7 +1437,7 @@ function renderAdminQuizzes() {
       ${quizzes.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Quiz</th><th>Teacher</th><th>Subject</th><th>Class</th><th>Questions</th><th>Approval</th><th>Practice</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Quiz</th><th>Teacher</th><th>Subject</th><th>Class</th><th>Questions</th><th>Schedule</th><th>Approval</th><th>Practice</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               ${quizzes.map(quiz => `
                 <tr>
@@ -1370,6 +1446,7 @@ function renderAdminQuizzes() {
                   <td>${esc(quiz.subjectName)}</td>
                   <td>${esc(quiz.className || "—")}</td>
                   <td>${esc(quiz.questionCount)}</td>
+                  <td class="schedule-cell">${esc(scheduleText(quiz))}</td>
                   <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
                   <td>${quiz.allowPractice !== false ? badge("On", "brand") : badge("Off", "neutral")}</td>
                   <td>${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}</td>
@@ -1547,6 +1624,7 @@ function renderTeacherView() {
   if (state.view === "questions") return renderTeacherQuestions();
   if (state.view === "quizzes") return renderTeacherQuizzes();
   if (state.view === "students") return renderTeacherStudents();
+  if (state.view === "leaderboard") return renderLeaderboard();
   if (state.view === "results") return renderTeacherResults();
   if (state.view === "submissions") return renderTeacherSubmissions();
   if (state.view === "announcements") return renderTeacherAnnouncements();
@@ -1556,7 +1634,7 @@ function renderTeacherView() {
 
 function renderTeacherOverview() {
   const d = state.data;
-  const recent = d.submissions.slice(0, 8);
+  const groups = groupSubmissionsByClass(d.submissions, 3);
   const hardest = d.hardestQuestion;
   return `
     ${pageHead("Teacher", "Overview", `Welcome, ${state.user.name}. Your subjects: ${availableSubjects().map(item => item.name).join(", ") || "not assigned"}.`,
@@ -1573,23 +1651,35 @@ function renderTeacherOverview() {
     <div class="grid-2">
       <section class="panel">
         <div class="panel-head">
-          <h2 class="panel-title">Recent submissions</h2>
+          <h2 class="panel-title">Recent submissions by class</h2>
           <button type="button" class="btn btn-sm btn-ghost" data-action="nav" data-view="submissions">View all</button>
         </div>
-        ${recent.length ? `
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Student</th><th>Quiz</th><th>Score</th><th>Submitted</th></tr></thead>
-              <tbody>
-                ${recent.map(item => `
-                  <tr>
-                    <td><strong>${esc(item.studentName)}</strong><span class="cell-sub">${esc(item.studentUsername)}</span></td>
-                    <td>${esc(item.quizTitle)}</td>
-                    <td><strong>${esc(item.pct)}%</strong><span class="cell-sub">${esc(item.score)}/${esc(item.total)}</span></td>
-                    <td class="nowrap">${esc(fmtDate(item.submittedAt))}</td>
-                  </tr>`).join("")}
-              </tbody>
-            </table>
+        ${groups.length ? `
+          <div class="class-submission-groups">
+            ${groups.map(group => `
+              <section class="class-submission-group">
+                <div class="class-group-head">
+                  <strong>${esc(group.name)}</strong>
+                  ${badge(`${group.total} submission${group.total === 1 ? "" : "s"}`)}
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Student</th><th>Quiz</th><th>Score</th><th>Submitted</th></tr></thead>
+                    <tbody>
+                      ${group.rows.map(item => `
+                        <tr>
+                          <td><strong>${esc(item.studentName)}</strong><span class="cell-sub">${esc(item.studentUsername)}</span></td>
+                          <td>${esc(item.quizTitle)}</td>
+                          <td><strong>${esc(item.pct)}%</strong><span class="cell-sub">${esc(item.score)}/${esc(item.total)}</span></td>
+                          <td class="nowrap">${esc(fmtDate(item.submittedAt))}</td>
+                        </tr>`).join("")}
+                    </tbody>
+                  </table>
+                </div>
+                ${group.total > group.rows.length
+                  ? `<button type="button" class="link-btn class-group-more" data-action="nav" data-view="submissions">See all ${esc(group.total)} in ${esc(group.name)}</button>`
+                  : ""}
+              </section>`).join("")}
           </div>` : emptyState("No submissions yet", "Student attempts will appear here after they submit.")}
       </section>
       <div class="stack">
@@ -1612,7 +1702,8 @@ function renderTeacherOverview() {
                     <div class="quiz-card-head">
                       <h3>${esc(quiz.title)}</h3>
                       <span class="row-actions">
-                        ${badge("Open", "ok")}
+                        ${badge(quiz.windowState === "scheduled" ? "Scheduled" : quiz.windowState === "expired" ? "Ended" : "Open",
+                          quiz.windowState === "scheduled" ? "brand" : quiz.windowState === "expired" ? "neutral" : "ok")}
                         ${quiz.shuffleQuestions ? badge("Shuffled", "brand") : ""}
                       </span>
                     </div>
@@ -1792,6 +1883,18 @@ function renderTeacherQuizzes() {
                 <p class="form-note">Allowed: ${esc(d.settings.minQuizMinutes)}–${esc(d.settings.maxQuizMinutes)} minutes and ${esc(d.settings.minQuestions)}–${esc(d.settings.maxQuestions)} questions.${d.settings.requireApproval ? " An administrator must approve this quiz before students see it." : " The quiz opens immediately."}</p>
               </div>
             </div>
+            <div class="form-row">
+              <div class="field">
+                <label for="quiz-start">Begin (optional)</label>
+                <input id="quiz-start" name="startAt" type="datetime-local">
+                <p class="form-note">Leave blank to open as soon as the quiz is approved.</p>
+              </div>
+              <div class="field">
+                <label for="quiz-end">End (optional)</label>
+                <input id="quiz-end" name="endAt" type="datetime-local">
+                <p class="form-note">Leave blank to keep the quiz open indefinitely.</p>
+              </div>
+            </div>
             <div class="field">
               <label class="check-item">
                 <input type="checkbox" name="shuffleQuestions">
@@ -1851,7 +1954,7 @@ function renderTeacherQuizzes() {
       ${d.quizzes.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Quiz</th><th>Subject</th><th>Class</th><th>Questions</th><th>Duration</th><th>Order</th><th>Practice</th><th>Approval</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Quiz</th><th>Subject</th><th>Class</th><th>Questions</th><th>Duration</th><th>Schedule</th><th>Order</th><th>Practice</th><th>Approval</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
             <tbody>
               ${d.quizzes.map(quiz => `
                 <tr>
@@ -1860,6 +1963,7 @@ function renderTeacherQuizzes() {
                   <td>${esc(quiz.className)}</td>
                   <td>${esc(quiz.questionCount)}</td>
                   <td>${esc(quiz.minutes)} min</td>
+                  <td class="schedule-cell">${esc(scheduleText(quiz))}</td>
                   <td>${quiz.shuffleQuestions ? badge("Shuffled", "brand") : badge("Fixed", "neutral")}</td>
                   <td>${quiz.allowPractice !== false ? badge("On", "brand") : badge("Off", "neutral")}</td>
                   <td>${quiz.approved ? badge("Approved", "ok") : badge("Pending", "warn")}</td>
@@ -1871,6 +1975,7 @@ function renderTeacherQuizzes() {
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-quiz" data-id="${quiz.id}">${quiz.isOpen ? "Close" : "Open"}</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-shuffle" data-id="${quiz.id}">${quiz.shuffleQuestions ? "Fixed order" : "Shuffle"}</button>
                       <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-practice" data-id="${quiz.id}">${quiz.allowPractice !== false ? "Disable practice" : "Enable practice"}</button>
+                      <button type="button" class="btn btn-sm btn-ghost" data-action="edit-schedule" data-id="${quiz.id}">Schedule</button>
                       <button type="button" class="btn btn-sm btn-danger" data-action="archive-quiz" data-id="${quiz.id}">Archive</button>
                     </div>
                   </td>
@@ -2023,31 +2128,38 @@ function renderTeacherResults() {
 }
 
 function renderTeacherSubmissions() {
-  const submissions = state.data.submissions;
+  const groups = groupSubmissionsByClass(state.data.submissions);
   return `
-    ${pageHead("Evidence", "Submissions", "Every submission is stored separately and can be inspected in detail.")}
-    <section class="panel">
-      ${submissions.length ? `
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Student</th><th>Quiz</th><th>Mode</th><th>Score</th><th>Submitted</th><th></th></tr></thead>
-            <tbody>
-              ${submissions.map(item => `
-                <tr>
-                  <td>
-                    <strong>${esc(item.studentName)}</strong>
-                    <span class="cell-sub">${esc(item.studentUsername)} · ${esc(item.className)}</span>
-                  </td>
-                  <td>${esc(item.quizTitle)}</td>
-                  <td>${badge(item.mode, item.mode === "Exam" ? "warn" : "brand")}</td>
-                  <td><strong>${esc(item.pct)}%</strong><span class="cell-sub">${esc(item.score)}/${esc(item.total)}</span></td>
-                  <td class="nowrap">${esc(fmtDate(item.submittedAt))}</td>
-                  <td><button type="button" class="btn btn-sm btn-ghost" data-action="inspect-submission" data-id="${item.id}">Inspect</button></td>
-                </tr>`).join("")}
-            </tbody>
-          </table>
-        </div>` : emptyState("No submissions yet", "Student results will appear here after they submit.")}
-    </section>`;
+    ${pageHead("Evidence", "Submissions", "Submissions are grouped by class so you can review each group's evidence together.")}
+    ${groups.length ? `
+      <div class="submission-groups">
+        ${groups.map(group => `
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">${esc(group.name)}</h2>
+              ${badge(`${group.total} submission${group.total === 1 ? "" : "s"}`)}
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Student</th><th>Quiz</th><th>Mode</th><th>Score</th><th>Submitted</th><th></th></tr></thead>
+                <tbody>
+                  ${group.rows.map(item => `
+                    <tr>
+                      <td>
+                        <strong>${esc(item.studentName)}</strong>
+                        <span class="cell-sub">${esc(item.studentUsername)}</span>
+                      </td>
+                      <td>${esc(item.quizTitle)}</td>
+                      <td>${badge(item.mode, item.mode === "Exam" ? "warn" : "brand")}</td>
+                      <td><strong>${esc(item.pct)}%</strong><span class="cell-sub">${esc(item.score)}/${esc(item.total)}</span></td>
+                      <td class="nowrap">${esc(fmtDate(item.submittedAt))}</td>
+                      <td><button type="button" class="btn btn-sm btn-ghost" data-action="inspect-submission" data-id="${item.id}">Inspect</button></td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>`).join("")}
+      </div>` : emptyState("No submissions yet", "Student results will appear here after they submit.")}`;
 }
 
 function renderTeacherAnnouncements() {
@@ -2205,7 +2317,7 @@ function renderComplaints() {
 /* Student */
 
 function renderStudentView() {
-  if (state.view === "leaderboard") return renderStudentLeaderboard();
+  if (state.view === "leaderboard") return renderLeaderboard();
   if (state.view === "rewards") return renderStudentRewards();
   if (state.view === "results") return renderStudentResults();
   if (state.view === "complaints") return renderComplaints();
@@ -2213,8 +2325,23 @@ function renderStudentView() {
 }
 
 async function loadLeaderboard() {
-  state.leaderboard = await api("/student/leaderboard");
-  return state.leaderboard;
+  if (state.user.role === "student") {
+    state.leaderboard = await api("/student/leaderboard");
+    return state.leaderboard;
+  }
+
+  const query = state.leaderboardClassId
+    ? `?classId=${encodeURIComponent(state.leaderboardClassId)}`
+    : "";
+  const result = await api(`/leaderboard${query}`);
+  state.leaderboardClasses = result.classes || [];
+  if (!state.leaderboardClassId && state.leaderboardClasses.length) {
+    state.leaderboardClassId = result.class
+      ? result.class.id
+      : state.leaderboardClasses[0].id;
+  }
+  state.leaderboard = result;
+  return result;
 }
 
 const BADGE_STORAGE_PREFIX = "lc-seen-badges:";
@@ -2466,27 +2593,45 @@ async function loadComplaints(filters = state.complaintFilters) {
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
-function renderStudentLeaderboard() {
+function renderLeaderboard() {
   const data = state.leaderboard;
+  const isStaff = Boolean(state.user && state.user.role !== "student");
+  const eyebrow = isStaff ? "Insight" : "Class challenge";
+  const title = isStaff ? "Class leaderboard" : "Leaderboard";
+
   if (!data) {
-    return `${pageHead("Class challenge", "Leaderboard", "Ranking your class by the points earned across quizzes.")}
-      <section class="panel"><div class="panel-body">${emptyState("Loading standings…", "Fetching your class leaderboard.")}</div></section>`;
+    return `${pageHead(eyebrow, title, "Ranking classes by the points earned across quizzes.")}
+      <section class="panel"><div class="panel-body">${emptyState("Loading standings…", "Fetching the class leaderboard.")}</div></section>`;
   }
   if (!data.class) {
-    return `${pageHead("Class challenge", "Leaderboard", "See how you stack up against your classmates.")}
-      ${emptyState("No class yet", "You'll appear on the leaderboard once your teacher assigns you to a class.")}`;
+    return `${pageHead(eyebrow, title, "See how students are doing across their quizzes.")}
+      ${emptyState(isStaff ? "No classes to show" : "No class yet",
+        isStaff
+          ? "Classes appear here once a teacher creates a quiz for them."
+          : "You'll appear on the leaderboard once your teacher assigns you to a class.")}`;
   }
 
   const rows = data.leaderboard || [];
-  const you = data.you;
+  const you = isStaff ? null : data.you;
   const quizLabel = `${esc(data.quizCount)} quiz${data.quizCount === 1 ? "" : "zes"} counted`;
+  const classPicker = isStaff && data.classes && data.classes.length
+    ? `<label class="lb-picker">
+        <span class="sr-only">Choose a class</span>
+        <select data-leaderboard-class>
+          ${data.classes.map(cls => `
+            <option value="${esc(cls.id)}" ${Number(cls.id) === Number(data.class.id) ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
+        </select>
+      </label>`
+    : "";
+  const actions = `${classPicker}<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`;
+  const subtitle = isStaff
+    ? `Ranked by each student's best score on every non-archived quiz in ${data.class.name}.`
+    : `Your class score is the sum of your best result on every quiz in ${data.class.name}. Improve your best and complete more quizzes to climb.`;
 
   return `
-    ${pageHead("Class challenge", "Leaderboard",
-      `Your class score is the sum of your best result on every quiz in ${esc(data.class.name)}. Improve your best and complete more quizzes to climb.`,
-      `<button type="button" class="btn" data-action="refresh-leaderboard">Refresh standings</button>`)}
+    ${pageHead(eyebrow, title, subtitle, actions)}
 
-    ${state.progress && state.progress.classGoal ? `
+    ${!isStaff && state.progress && state.progress.classGoal ? `
       <div class="quest-inline ${state.progress.classGoal.complete ? "is-complete" : ""}">
         <span class="quest-inline-icon" aria-hidden="true">🤝</span>
         <div class="quest-inline-copy">
@@ -2514,7 +2659,7 @@ function renderStudentLeaderboard() {
       ${rows.length ? `
         <ol class="leaderboard">
           ${rows.map(row => {
-            const isYou = Number(row.studentId) === Number(state.user.id);
+            const isYou = !isStaff && Number(row.studentId) === Number(state.user.id);
             return `
               <li class="leaderboard-row ${isYou ? "is-you" : ""}">
                 <span class="lb-rank ${row.rank <= 3 ? `lb-medal lb-medal-${row.rank}` : ""}" aria-hidden="true">${row.rank <= 3 ? MEDALS[row.rank - 1] : row.rank}</span>
@@ -2527,7 +2672,7 @@ function renderStudentLeaderboard() {
                 <span class="lb-points"><strong>${esc(row.points)}</strong><span>pts</span></span>
               </li>`;
           }).join("")}
-        </ol>` : emptyState("No students yet", "The standings will fill in once your classmates take quizzes.")}
+        </ol>` : emptyState("No students yet", "The standings will fill in once students take quizzes.")}
     </section>`;
 }
 
@@ -2629,30 +2774,42 @@ function renderStudentDashboard() {
     </div>
     ${d.quizzes.length ? `
       <div class="quiz-grid">
-        ${d.quizzes.map((quiz, index) => `
+        ${d.quizzes.map((quiz, index) => {
+          const available = quiz.availability === "open";
+          const status = quiz.availability === "scheduled"
+            ? badge("Scheduled", "brand")
+            : quiz.availability === "closed"
+              ? badge("Closed", "neutral")
+              : badge("Open", "ok");
+          const closedNote = quiz.availability === "scheduled"
+            ? "This quiz has not opened yet."
+            : "This quiz window has ended.";
+          return `
           <article class="quiz-card tone-${index % 5}">
             <div class="quiz-card-head">
               <h3><span class="quiz-icon" aria-hidden="true">${esc(subjectName(quiz.subjectId).slice(0, 1).toUpperCase())}</span>${esc(quiz.title)}</h3>
-              ${quiz.isOpen ? badge("Open", "ok") : badge("Closed", "neutral")}
+              ${status}
             </div>
             <div class="quiz-meta">
               <span>${esc(quiz.questionCount)} question${quiz.questionCount === 1 ? "" : "s"}</span>
               <span>${esc(quiz.minutes)} min</span>
               <span>${esc(quiz.attempts)} submitted attempt${quiz.attempts === 1 ? "" : "s"}</span>
             </div>
+            ${quiz.startAt || quiz.endAt ? `<p class="quiz-schedule">🗓 ${esc(scheduleText(quiz))}</p>` : ""}
             ${quiz.bestPct === null
               ? `<p class="muted small">No submitted attempt yet.</p>`
               : `<p class="quiz-score"><span>Best score</span><strong>${esc(quiz.bestPct)}%</strong><span class="muted">last ${esc(fmtDate(quiz.lastSubmittedAt))}</span></p>
                  <div class="quiz-score-bar" aria-hidden="true"><span style="--bar-width: ${Number(quiz.bestPct)}%"></span></div>`}
             ${quiz.bestPct !== null ? `<p class="quiz-hint">${Number(quiz.bestPct) >= Number(d.settings.passMark) ? "Nice work — you passed this one!" : "Try again and beat your best score."}</p>` : ""}
             <div class="quiz-actions">
-              ${quiz.isOpen ? `
+              ${available ? `
                 ${quiz.allowPractice !== false
                   ? `<button type="button" class="btn btn-primary btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Practice">Practice</button>`
                   : `<span class="muted small">Practice is off for this quiz</span>`}
-                <button type="button" class="btn btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Exam">Start exam</button>` : `<span class="muted small">This quiz is closed.</span>`}
+                <button type="button" class="btn btn-sm" data-action="start-quiz" data-id="${quiz.id}" data-mode="Exam">Start exam</button>` : `<span class="muted small">${esc(closedNote)}</span>`}
             </div>
-          </article>`).join("")}
+          </article>`;
+        }).join("")}
       </div>` : emptyState("No quizzes yet", "When your teacher publishes a quiz for your class, it will appear here.")}`;
 }
 
@@ -3520,6 +3677,42 @@ function openAssignSubjects(userId) {
     </div>`);
 }
 
+function openQuizSchedule(quizId) {
+  const quiz = ((state.data && state.data.quizzes) || [])
+    .find(item => Number(item.id) === Number(quizId));
+  if (!quiz) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Assessment window</span>
+        <h2 id="modal-title">Quiz schedule</h2>
+        <p>${esc(quiz.title)} · ${esc(quiz.className || "No class")}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="update-quiz-schedule">
+        <input type="hidden" name="id" value="${esc(quiz.id)}">
+        <div class="form-row">
+          <div class="field">
+            <label for="schedule-start">Begin</label>
+            <input id="schedule-start" name="startAt" type="datetime-local" value="${esc(toDatetimeLocal(quiz.startAt))}">
+          </div>
+          <div class="field">
+            <label for="schedule-end">End</label>
+            <input id="schedule-end" name="endAt" type="datetime-local" value="${esc(toDatetimeLocal(quiz.endAt))}">
+          </div>
+        </div>
+        <p class="form-note">Students see this quiz only while it is open and inside this window. Leave a field blank for no restriction on that side. Exam attempts end no later than the end time.</p>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save schedule</button>
+        </div>
+      </form>
+    </div>`);
+}
+
 function openMoveStudent(studentId) {
   const target = (state.data.students || []).find(student => Number(student.id) === Number(studentId));
   if (!target) return;
@@ -3808,6 +4001,9 @@ async function runAction(button) {
       toast(`Practice ${allowPractice ? "enabled" : "disabled"}.`, "success");
       return;
     }
+    case "edit-schedule":
+      openQuizSchedule(id);
+      return;
     case "archive-quiz": {
       const target = d.quizzes.find(quiz => quiz.id === id);
       if (!target) return;
@@ -4280,6 +4476,11 @@ async function handleSubmit(form) {
       const data = new FormData(form);
       const questionIds = data.getAll("questionIds").map(value => Number(value));
       if (!questionIds.length) throw new Error("Select at least one question.");
+      const startAt = datetimeLocalToIso(data.get("startAt"));
+      const endAt = datetimeLocalToIso(data.get("endAt"));
+      if (startAt && endAt && new Date(endAt) <= new Date(startAt)) {
+        throw new Error("End time must be after the begin time.");
+      }
       await api("/teacher/quizzes", {
         method: "POST",
         body: {
@@ -4289,6 +4490,8 @@ async function handleSubmit(form) {
           minutes: Number(data.get("minutes")),
           shuffleQuestions: Boolean(data.get("shuffleQuestions")),
           allowPractice: Boolean(data.get("allowPractice")),
+          startAt,
+          endAt,
           questionIds
         }
       });
@@ -4296,6 +4499,25 @@ async function handleSubmit(form) {
       toast(state.data.settings.requireApproval
         ? "Quiz created and sent for approval."
         : "Quiz created and opened.", "success");
+    });
+    return;
+  }
+
+  if (formType === "update-quiz-schedule") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const startAt = datetimeLocalToIso(data.get("startAt"));
+      const endAt = datetimeLocalToIso(data.get("endAt"));
+      if (startAt && endAt && new Date(endAt) <= new Date(startAt)) {
+        throw new Error("End time must be after the begin time.");
+      }
+      await api(`/teacher/quizzes/${Number(data.get("id"))}`, {
+        method: "PATCH",
+        body: { startAt, endAt }
+      });
+      closeModal();
+      await refresh();
+      toast("Quiz schedule updated.", "success");
     });
     return;
   }
@@ -4329,7 +4551,22 @@ document.addEventListener("click", async event => {
   }
 });
 
-document.addEventListener("change", event => {
+document.addEventListener("change", async event => {
+  const classSelect = event.target.closest("[data-leaderboard-class]");
+  if (classSelect) {
+    state.leaderboardClassId = Number(classSelect.value) || null;
+    try {
+      await loadLeaderboard();
+      render();
+      const nextSelect = document.querySelector("[data-leaderboard-class]");
+      if (nextSelect) nextSelect.focus({ preventScroll: true });
+      else focusMainContent();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
   const select = event.target.closest('select[name="subjectId"], select[name="role"]');
   if (!select) return;
   applyFormVisibility();

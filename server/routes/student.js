@@ -5,7 +5,6 @@ const express = require("express");
 const config = require("../config");
 const {
   listWhere,
-  listWhereIn,
   getDocById,
   getManyByIds,
   insertDoc,
@@ -22,6 +21,8 @@ const {
 const { asyncHandler, parseOptions, toBoolean, logActivity } = require("../utils");
 const { getSettings } = require("../settings");
 const { buildStudentProgress } = require("../progress");
+const { buildClassLeaderboard } = require("../leaderboard");
+const { effectiveDeadline, quizWindow, whenText } = require("../quiz-window");
 const { idSchema, startAttemptSchema, answerSchema } = require("../validation");
 
 const router = express.Router();
@@ -46,6 +47,13 @@ async function loadQuizForStudent(quizId, user) {
   const approved = quiz.approved !== false;
   if (!open || !approved) {
     return { error: { status: 403, message: "This quiz is not available yet." } };
+  }
+  const window = quizWindow(quiz);
+  if (window.state === "scheduled") {
+    return { error: { status: 403, message: `This quiz opens ${whenText(window.startAt)}.` } };
+  }
+  if (window.state === "expired") {
+    return { error: { status: 403, message: `This quiz closed ${whenText(window.endAt)}.` } };
   }
   const cls = await getDocById("classes", quiz.class_id);
   return { quiz: { ...quiz, class_name: cls ? cls.name : null } };
@@ -199,6 +207,7 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
   }
 
   const bestPcts = Array.from(byQuiz.values()).map(bucket => bucket.bestPct).filter(value => value !== null);
+  const availableCount = quizzes.filter(quiz => quizWindow(quiz).available).length;
 
   const sortedSubmissions = [...mySubmissions]
     .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))
@@ -208,11 +217,17 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
     class: req.publicUser.classId ? { id: req.publicUser.classId, name: req.publicUser.className } : null,
     quizzes: quizzes.map(quiz => {
       const bucket = byQuiz.get(Number(quiz.id)) || { attempts: 0, bestPct: null, lastSubmittedAt: null };
+      const window = quizWindow(quiz);
       return {
         id: quiz.id,
         title: quiz.title,
         minutes: Number(quiz.minutes),
         isOpen: toBoolean(quiz.is_open),
+        availability: window.state === "scheduled" ? "scheduled"
+          : window.state === "expired" ? "closed"
+            : "open",
+        startAt: window.startAt,
+        endAt: window.endAt,
         allowPractice: practiceAllowed(quiz),
         questionCount: questionCountMap.get(Number(quiz.id)) || 0,
         attempts: bucket.attempts,
@@ -248,96 +263,20 @@ router.get("/dashboard", asyncHandler(async (req, res) => {
       quizzesTaken: byQuiz.size,
       average: bestPcts.length ? Math.round(bestPcts.reduce((sum, value) => sum + value, 0) / bestPcts.length) : 0,
       passed: bestPcts.filter(value => value >= settings.passMark).length,
-      available: quizzes.length
+      available: availableCount
     }
   });
 }));
 
-// Class leaderboard. Each student's "class score" is the sum of their best
-// percentage on every (non-archived) quiz in their own class, which rewards
-// both accuracy and completing more quizzes.
-function leaderboardTier(rank, points) {
-  if (points <= 0) return { label: "Up & coming", tone: "warn" };
-  if (rank === 1) return { label: "Champion", tone: "brand" };
-  if (rank <= 3) return { label: "Star", tone: "ok" };
-  if (rank <= 10) return { label: "Achiever", tone: "neutral" };
-  return { label: "Climber", tone: "neutral" };
-}
-
+// Class leaderboard. The ranking logic lives in server/leaderboard.js so staff
+// can see the same standings without widening student-route permissions.
 router.get("/leaderboard", asyncHandler(async (req, res) => {
-  const studentId = req.user.id;
   const classId = req.user.class_id;
-
   const cls = classId === null || classId === undefined
     ? null
     : await getDocById("classes", classId);
-  const classQuizzes = cls
-    ? (await listWhere("quizzes", "class_id", classId))
-        .filter(quiz => !quiz.is_deleted)
-    : [];
-  const quizIds = classQuizzes.map(quiz => Number(quiz.id));
 
-  const [members, submissions] = await Promise.all([
-    cls ? listWhere("users", "class_id", classId) : Promise.resolve([]),
-    quizIds.length ? listWhereIn("submissions", "quiz_id", quizIds) : Promise.resolve([])
-  ]);
-
-  const students = members
-    .filter(user => user.role === "student" && toBoolean(user.active))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  const quizSet = new Set(quizIds);
-  const bestByStudent = new Map();
-  for (const submission of submissions) {
-    const ownerId = Number(submission.student_id);
-    const quizId = Number(submission.quiz_id);
-    if (!quizSet.has(quizId)) continue;
-    let bests = bestByStudent.get(ownerId);
-    if (!bests) {
-      bests = new Map();
-      bestByStudent.set(ownerId, bests);
-    }
-    const pct = Number(submission.pct) || 0;
-    if (pct > (bests.get(quizId) || -1)) bests.set(quizId, pct);
-  }
-
-  const ranked = students.map(student => {
-    const sid = Number(student.id);
-    const bests = bestByStudent.get(sid) || new Map();
-    const pointList = [...bests.values()];
-    return {
-      studentId: sid,
-      name: student.name,
-      points: pointList.reduce((sum, value) => sum + value, 0),
-      quizzesTaken: bests.size
-    };
-  });
-
-  ranked.sort((a, b) =>
-    b.points - a.points ||
-    b.quizzesTaken - a.quizzesTaken ||
-    a.name.localeCompare(b.name)
-  );
-
-  const leaderboard = ranked.map((row, index) => {
-    const rank = index + 1;
-    const tier = leaderboardTier(rank, row.points);
-    return { rank, ...row, tier: tier.label, tierTone: tier.tone };
-  });
-
-  const me = leaderboard.find(row => row.studentId === Number(studentId)) || null;
-
-  return res.json({
-    class: cls ? { id: Number(cls.id), name: cls.name } : null,
-    quizCount: quizIds.length,
-    leaderboard,
-    you: me ? {
-      rank: me.rank,
-      name: me.name,
-      points: me.points,
-      quizzesTaken: me.quizzesTaken
-    } : null
-  });
+  return res.json(await buildClassLeaderboard(cls, req.user.id));
 }));
 
 // Rewards progress (XP, levels, streaks and badges) derived from the
@@ -415,7 +354,9 @@ router.post("/quizzes/:id/start", asyncHandler(async (req, res) => {
       question_order: order,
       status: "in_progress",
       started_at: new Date(),
-      expires_at: input.mode === "Exam" ? new Date(Date.now() + Number(quiz.minutes) * 60000) : null,
+      expires_at: input.mode === "Exam"
+        ? effectiveDeadline(quiz, new Date(Date.now() + Number(quiz.minutes) * 60000))
+        : null,
       submitted_at: null
     }, "attempts");
 

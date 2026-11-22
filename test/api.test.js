@@ -427,6 +427,69 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(otherTeacherQuiz.status, 400);
   });
 
+  await t.test("quiz begin and end times gate student access", async () => {
+    const start = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+
+    const invalidWindow = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Backwards Window",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 20,
+        startAt: end,
+        endAt: start,
+        questionIds: [firstQuestionId]
+      });
+    assert.equal(invalidWindow.status, 400);
+
+    const scheduled = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Scheduled Check",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 20,
+        startAt: start,
+        endAt: end,
+        questionIds: [firstQuestionId]
+      });
+    assert.equal(scheduled.status, 201);
+    const scheduledId = scheduled.body.quiz.id;
+    assert.ok(scheduled.body.quiz.startAt);
+    assert.ok(scheduled.body.quiz.endAt);
+
+    const dashboard = await studentAgent.get("/api/student/dashboard");
+    assert.equal(dashboard.status, 200);
+    const scheduledCard = dashboard.body.quizzes.find(item => Number(item.id) === Number(scheduledId));
+    assert.ok(scheduledCard, "scheduled quizzes should still be visible on the dashboard");
+    assert.equal(scheduledCard.availability, "scheduled");
+    assert.ok(scheduledCard.startAt);
+    assert.ok(scheduledCard.endAt);
+
+    const blocked = await studentAgent
+      .post(`/api/student/quizzes/${scheduledId}/start`)
+      .set(CSRF)
+      .send({ mode: "Exam" });
+    assert.equal(blocked.status, 403);
+
+    const cleared = await teacherAgent
+      .patch(`/api/teacher/quizzes/${scheduledId}`)
+      .set(CSRF)
+      .send({ startAt: null, endAt: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.startAt, null);
+    assert.equal(cleared.body.endAt, null);
+
+    const archived = await teacherAgent
+      .delete(`/api/teacher/quizzes/${scheduledId}`)
+      .set(CSRF);
+    assert.equal(archived.status, 200);
+  });
+
   await t.test("teacher downloads question import templates in every supported format", async () => {
     const csv = await teacherAgent.get("/api/teacher/questions/template.csv");
     assert.equal(csv.status, 200);
@@ -777,6 +840,15 @@ test("secured portal end-to-end API flow", async t => {
     assert.match(csv.headers["content-type"], /text\/csv/);
     assert.match(csv.text, /Student One/);
     assert.match(csv.text, /Basic 8A - Gold/);
+  });
+
+  await t.test("teacher bootstrap exposes class grouping and quiz windows", async () => {
+    const bootstrap = await teacherAgent.get("/api/teacher/bootstrap");
+    assert.equal(bootstrap.status, 200);
+    assert.ok(bootstrap.body.submissions.length > 0);
+    assert.ok(bootstrap.body.submissions.every(item => "classId" in item));
+    assert.ok(bootstrap.body.submissions.some(item => Number(item.classId) === Number(classId)));
+    assert.ok(bootstrap.body.quizzes.every(item => "startAt" in item && "endAt" in item));
   });
 
   await t.test("submission access is scoped to owner, teacher and admin", async () => {
@@ -1344,6 +1416,39 @@ test("secured portal end-to-end API flow", async t => {
     assert.ok(leaderboard.body.leaderboard.every(row => typeof row.points === "number"));
 
     const anonymous = await request(app).get("/api/student/leaderboard");
+    assert.equal(anonymous.status, 401);
+  });
+
+  await t.test("admins and teachers can view class leaderboards within their scope", async () => {
+    const outside = await adminAgent
+      .post("/api/admin/classes")
+      .set(CSRF)
+      .send({ name: "Leaderboard Outside" });
+    assert.equal(outside.status, 201);
+    const outsideId = outside.body.class.id;
+
+    const teacherView = await teacherAgent.get("/api/leaderboard");
+    assert.equal(teacherView.status, 200);
+    assert.equal(Number(teacherView.body.class.id), Number(classId));
+    assert.ok(teacherView.body.classes.length >= 2);
+    assert.equal(teacherView.body.you, null);
+
+    const denied = await teacherAgent.get(`/api/leaderboard?classId=${outsideId}`);
+    assert.equal(denied.status, 403);
+
+    const adminView = await adminAgent.get(`/api/leaderboard?classId=${outsideId}`);
+    assert.equal(adminView.status, 200);
+    assert.equal(Number(adminView.body.class.id), Number(outsideId));
+    assert.equal(adminView.body.leaderboard.length, 0);
+
+    const unscopedTeacher = await teacher2Agent.get("/api/leaderboard");
+    assert.equal(unscopedTeacher.status, 200);
+    assert.equal(unscopedTeacher.body.class, null);
+    assert.deepEqual(unscopedTeacher.body.classes, []);
+
+    const studentBlocked = await studentAgent.get("/api/leaderboard");
+    assert.equal(studentBlocked.status, 403);
+    const anonymous = await request(app).get("/api/leaderboard");
     assert.equal(anonymous.status, 401);
   });
 

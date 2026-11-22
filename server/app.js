@@ -13,10 +13,11 @@ const authRouter = require("./routes/auth");
 const adminRouter = require("./routes/admin");
 const teacherRouter = require("./routes/teacher");
 const studentRouter = require("./routes/student");
+const leaderboardRouter = require("./routes/leaderboard");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const config = require("./config");
-const { authenticate, requireRole, requirePasswordChanged } = require("./security");
+const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
 const app = express();
 
@@ -102,6 +103,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/admin", authenticate, requirePasswordChanged, requireRole("admin"), adminRouter);
 app.use("/api/teacher", authenticate, requirePasswordChanged, requireRole("teacher"), teacherRouter);
 app.use("/api/student", authenticate, requirePasswordChanged, requireRole("student"), studentRouter);
+app.use("/api/leaderboard", authenticate, requirePasswordChanged, requireAnyRole("admin", "teacher"), leaderboardRouter);
 app.use("/api/submissions", authenticate, requirePasswordChanged, submissionsRouter);
 // Role checks for complaints happen inside the router: participants and admins
 // have different permissions on the same collection.
