@@ -59,8 +59,15 @@ const config = {
     projectId: process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || "gbat-quiz",
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
     privateKey: process.env.FIREBASE_PRIVATE_KEY || "",
-    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT || ""
+    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT || "",
+    // Firebase Storage bucket for learning materials. When unset, the classic
+    // <project-id>.appspot.com bucket is used.
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || ""
   },
+  materialMaxUploadBytes: Math.max(
+    1024 * 1024,
+    Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024
+  ),
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "4h",
   // Inactivity timeout. The browser counts real user activity; the server also

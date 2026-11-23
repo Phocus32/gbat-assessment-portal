@@ -3595,6 +3595,99 @@ button.reward-badge:hover {
   min-width: 11rem;
 }
 
+/* Learning materials */
+
+.material-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+}
+
+.material-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.material-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.material-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.9rem;
+  background: var(--surface-soft);
+  font-size: 1.35rem;
+}
+
+.material-type-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.material-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.material-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.material-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.material-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.4rem;
+}
+
+.material-class-list {
+  display: grid;
+  gap: 0.4rem;
+  max-height: 9rem;
+  overflow: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--surface-soft);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.check-row input {
+  width: auto;
+}
+
 @media (max-width: 700px) {
   .schedule-cell {
     min-width: 0;
@@ -3603,5 +3696,9 @@ button.reward-badge:hover {
   .lb-picker,
   .lb-picker select {
     width: 100%;
+  }
+
+  .material-card {
+    padding: 0.9rem;
   }
 }

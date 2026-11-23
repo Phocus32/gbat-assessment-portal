@@ -18,6 +18,7 @@ const NAV_ITEMS = {
     ["classes", "Classes"],
     ["users", "Users"],
     ["leaderboard", "Leaderboard"],
+    ["materials", "Materials"],
     ["quizzes", "Quizzes"],
     ["activity", "Activity"],
     ["complaints", "Complaints"],
@@ -29,6 +30,7 @@ const NAV_ITEMS = {
     ["quizzes", "Quizzes"],
     ["students", "Students"],
     ["leaderboard", "Leaderboard"],
+    ["materials", "Materials"],
     ["results", "Results"],
     ["submissions", "Submissions"],
     ["announcements", "Announcements"],
@@ -37,10 +39,29 @@ const NAV_ITEMS = {
   student: [
     ["dashboard", "Dashboard"],
     ["leaderboard", "Leaderboard"],
+    ["materials", "Materials"],
     ["rewards", "Rewards"],
     ["results", "My results"],
     ["complaints", "Complaints"]
   ]
+};
+
+const MATERIAL_TYPES = [
+  ["pdf", "PDF"],
+  ["slides", "Slides"],
+  ["document", "Document"],
+  ["image", "Image"],
+  ["video", "Video"],
+  ["link", "Link"]
+];
+
+const MATERIAL_ICONS = {
+  pdf: "📄",
+  slides: "📊",
+  document: "📝",
+  image: "🖼️",
+  video: "▶️",
+  link: "🔗"
 };
 
 const state = {
@@ -65,6 +86,8 @@ const state = {
   leaderboardClassId: null,
   leaderboardClasses: [],
   leaderboardPeriod: "week",
+  materials: null,
+  materialFilters: { q: "", subjectId: "all", classId: "all", type: "all" },
   progress: null,
   badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
@@ -102,7 +125,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=20";
+const LOGO_MARK = "/logo-mark.svg?v=21";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -274,6 +297,20 @@ function fmtDateTime(value) {
     month: "short",
     ...(includeYear ? { year: "numeric" } : {})
   })}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB"];
+  let scaled = value / 1024;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 10 ? Math.round(scaled) : scaled.toFixed(1)} ${units[unit]}`;
 }
 
 function scheduleText(quiz) {
@@ -1085,6 +1122,7 @@ async function refresh() {
   try {
     await loadData();
     if (state.view === "complaints") await loadComplaints();
+    if (state.view === "materials") await loadMaterials();
     state.results = null;
     state.resultsQuizId = null;
     state.userSearch = { ...state.userSearch, results: null };
@@ -1128,6 +1166,13 @@ async function navTo(view) {
   if (view === "leaderboard") {
     try {
       await loadLeaderboard();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (view === "materials") {
+    try {
+      await loadMaterials();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1252,6 +1297,7 @@ function renderAdminView() {
   if (state.view === "subjects") return renderAdminSubjects();
   if (state.view === "classes") return renderAdminClasses();
   if (state.view === "leaderboard") return renderLeaderboard();
+  if (state.view === "materials") return renderMaterials();
   if (state.view === "users") return renderAdminUsers();
   if (state.view === "quizzes") return renderAdminQuizzes();
   if (state.view === "activity") return renderAdminActivity();
@@ -1667,6 +1713,7 @@ function renderTeacherView() {
   if (state.view === "quizzes") return renderTeacherQuizzes();
   if (state.view === "students") return renderTeacherStudents();
   if (state.view === "leaderboard") return renderLeaderboard();
+  if (state.view === "materials") return renderMaterials();
   if (state.view === "results") return renderTeacherResults();
   if (state.view === "submissions") return renderTeacherSubmissions();
   if (state.view === "announcements") return renderTeacherAnnouncements();
@@ -2371,6 +2418,7 @@ function renderComplaints() {
 
 function renderStudentView() {
   if (state.view === "leaderboard") return renderLeaderboard();
+  if (state.view === "materials") return renderMaterials();
   if (state.view === "rewards") return renderStudentRewards();
   if (state.view === "results") return renderStudentResults();
   if (state.view === "complaints") return renderComplaints();
@@ -2768,6 +2816,221 @@ function ordinal(value) {
     case 3: return `${n}rd`;
     default: return `${n}th`;
   }
+}
+
+/* Learning materials */
+
+async function loadMaterials() {
+  const filters = state.materialFilters;
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.subjectId && filters.subjectId !== "all") params.set("subjectId", filters.subjectId);
+  if (filters.classId && filters.classId !== "all") params.set("classId", filters.classId);
+  if (filters.type && filters.type !== "all") params.set("type", filters.type);
+  const query = params.toString();
+  state.materials = await api(`/materials${query ? `?${query}` : ""}`);
+  return state.materials;
+}
+
+function materialCard(item, canManage) {
+  const meta = [
+    item.subjectName,
+    item.classNames.length ? item.classNames.join(", ") : null,
+    formatBytes(item.sizeBytes)
+  ].filter(Boolean).join(" · ");
+  const openLabel = item.kind === "link"
+    ? (item.fileType === "video" ? "Watch video" : "Visit link")
+    : "Open file";
+  return `
+    <article class="material-card" data-reveal>
+      <div class="material-card-top">
+        <span class="material-icon" aria-hidden="true">${MATERIAL_ICONS[item.fileType] || "📚"}</span>
+        <span class="material-type-label">${esc(item.typeLabel)}</span>
+      </div>
+      <h3>${esc(item.title)}</h3>
+      ${item.description ? `<p class="material-copy">${esc(item.description)}</p>` : ""}
+      <p class="material-meta">${esc(meta || "Shared learning material")}</p>
+      <p class="material-meta small">Added ${esc(fmtDate(item.createdAt))}${item.uploadedByName ? ` by ${esc(item.uploadedByName)}` : ""} · ${esc(item.views)} view${item.views === 1 ? "" : "s"}</p>
+      <div class="material-actions">
+        ${item.url
+          ? `<button type="button" class="btn btn-sm" data-action="open-material" data-id="${item.id}" data-url="${esc(item.url)}">${openLabel}</button>`
+          : `<span class="muted small">File unavailable right now</span>`}
+        ${canManage
+          ? `<button type="button" class="btn btn-sm btn-danger" data-action="delete-material" data-id="${item.id}">Remove</button>`
+          : ""}
+      </div>
+    </article>`;
+}
+
+function renderMaterials() {
+  const data = state.materials;
+  const canManage = Boolean(data && data.canManage);
+  const eyebrow = canManage ? "Resource library" : "Learn";
+  const title = "Learning materials";
+  const subtitle = canManage
+    ? "Share PDFs, slides, documents, images and useful links with the right classes."
+    : "Notes, slides, videos and links shared by your teachers.";
+  const actions = canManage
+    ? `<button type="button" class="btn btn-primary" data-action="open-material-dialog">Add material</button>`
+    : "";
+
+  if (!data) {
+    return `${pageHead(eyebrow, title, subtitle, actions)}
+      <section class="panel">${emptyState("Loading materials", "Your resource library is on its way.")}</section>`;
+  }
+
+  const filters = state.materialFilters;
+  const subjectOptions = data.subjects.map(subject =>
+    `<option value="${subject.id}" ${String(filters.subjectId) === String(subject.id) ? "selected" : ""}>${esc(subject.name)}</option>`
+  ).join("");
+  const typeOptions = MATERIAL_TYPES.map(([value, label]) =>
+    `<option value="${value}" ${filters.type === value ? "selected" : ""}>${esc(label)}</option>`
+  ).join("");
+  const classOptions = data.classes.map(cls =>
+    `<option value="${cls.id}" ${String(filters.classId) === String(cls.id) ? "selected" : ""}>${esc(cls.name)}</option>`
+  ).join("");
+
+  return `
+    ${pageHead(eyebrow, title, subtitle, actions)}
+    <section class="panel">
+      <form class="inline-form" data-form="filter-materials">
+        <label class="sr-only" for="material-search">Search materials</label>
+        <input id="material-search" name="q" type="search" placeholder="Search by title or description" value="${esc(filters.q)}" maxlength="120">
+        <label class="sr-only" for="material-subject-filter">Subject</label>
+        <select id="material-subject-filter" name="subjectId">
+          <option value="all" ${filters.subjectId === "all" ? "selected" : ""}>All subjects</option>
+          ${subjectOptions}
+        </select>
+        <label class="sr-only" for="material-type-filter">Type</label>
+        <select id="material-type-filter" name="type">
+          <option value="all" ${filters.type === "all" ? "selected" : ""}>All types</option>
+          ${typeOptions}
+        </select>
+        ${canManage && data.classes.length > 1 ? `
+          <label class="sr-only" for="material-class-filter">Class</label>
+          <select id="material-class-filter" name="classId">
+            <option value="all" ${filters.classId === "all" ? "selected" : ""}>All classes</option>
+            ${classOptions}
+          </select>` : ""}
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <button type="button" class="btn" data-action="clear-material-filters">Clear</button>
+      </form>
+    </section>
+
+    ${data.materials.length
+      ? `<div class="material-grid">${data.materials.map(item => materialCard(item, canManage)).join("")}</div>`
+      : emptyState(
+        "No materials yet",
+        canManage
+          ? "Add your first PDF, slide deck or link to get started."
+          : "Your teachers have not shared any materials for your class yet."
+      )}`;
+}
+
+function applyMaterialKind() {
+  const form = document.querySelector('form[data-form="create-material"]');
+  if (!form) return;
+  const kind = form.querySelector("[data-material-kind]");
+  const fileWrap = form.querySelector("[data-material-file]");
+  const linkWrap = form.querySelector("[data-material-link]");
+  const type = form.querySelector("[data-material-type]");
+  const fileInput = form.querySelector('input[type="file"]');
+  if (!kind || !fileWrap || !linkWrap || !type) return;
+
+  const isFile = kind.value === "file";
+  fileWrap.hidden = !isFile;
+  linkWrap.hidden = isFile;
+  for (const option of type.options) {
+    option.disabled = isFile
+      ? ["video", "link"].includes(option.value)
+      : !["video", "link"].includes(option.value);
+  }
+  if (type.options[type.selectedIndex] && type.options[type.selectedIndex].disabled) {
+    type.value = isFile ? "pdf" : "link";
+  }
+  if (fileInput) {
+    fileInput.accept = {
+      pdf: ".pdf,application/pdf",
+      slides: ".ppt,.pptx,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      document: ".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      image: "image/*"
+    }[type.value] || "";
+  }
+}
+
+function openMaterialDialog() {
+  const data = state.materials;
+  if (!data) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Add learning material</h2>
+        <p>Share a file or a useful link with the classes you teach.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="create-material" novalidate>
+        <div class="field">
+          <label for="material-title">Title</label>
+          <input id="material-title" name="title" type="text" maxlength="160" required>
+        </div>
+        <div class="field">
+          <label for="material-description">Description <span class="muted small">(optional)</span></label>
+          <textarea id="material-description" name="description" rows="3" maxlength="1000"></textarea>
+        </div>
+        <div class="form-grid two">
+          <div class="field">
+            <label for="material-kind">What are you adding?</label>
+            <select id="material-kind" name="kind" data-material-kind>
+              <option value="file">Upload a file</option>
+              <option value="link">Add a link</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="material-type">Content type</label>
+            <select id="material-type" name="fileType" data-material-type>
+              ${MATERIAL_TYPES.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="field" data-material-file>
+          <label for="material-file">File</label>
+          <input id="material-file" name="file" type="file">
+          <p class="form-note">PDF, PowerPoint, Word and image files up to 50 MB.</p>
+        </div>
+        <div class="field" data-material-link hidden>
+          <label for="material-link-url">Link URL</label>
+          <input id="material-link-url" name="linkUrl" type="url" placeholder="https://…" maxlength="2000">
+          <p class="form-note">Use a full http or https address. YouTube and Vimeo links work well for videos.</p>
+        </div>
+        <div class="form-grid two">
+          <div class="field">
+            <label for="material-subject">Subject <span class="muted small">(optional)</span></label>
+            <select id="material-subject" name="subjectId">
+              <option value="">General</option>
+              ${data.subjects.map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">Classes</span>
+            <div class="check-group material-class-list">
+              ${data.classes.map(cls => `
+                <label class="check-row">
+                  <input type="checkbox" name="classIds" value="${cls.id}" checked>
+                  <span>${esc(cls.name)}</span>
+                </label>`).join("")}
+            </div>
+          </div>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add material</button>
+        </div>
+      </form>
+    </div>`);
+  applyMaterialKind();
 }
 
 function studentHero() {
@@ -3853,6 +4116,40 @@ async function runAction(button) {
         toast(error.message, "error");
       }
       return;
+    case "open-material-dialog":
+      openMaterialDialog();
+      return;
+    case "clear-material-filters":
+      state.materialFilters = { q: "", subjectId: "all", classId: "all", type: "all" };
+      try {
+        await loadMaterials();
+        render();
+        focusAfterRender("#material-search");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
+    case "open-material": {
+      const url = button.dataset.url;
+      if (!url) {
+        toast("That file is not available right now.", "error");
+        return;
+      }
+      api(`/materials/${id}/view`, { method: "POST" }).catch(() => {});
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    case "delete-material":
+      if (!window.confirm("Remove this material from the library?")) return;
+      try {
+        await api(`/materials/${id}`, { method: "DELETE" });
+        await loadMaterials();
+        render();
+        toast("Material removed.", "success");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
     case "filter-badges":
       state.badgeFilter = button.dataset.filter || "all";
       render();
@@ -4622,6 +4919,71 @@ async function handleSubmit(form) {
     return;
   }
 
+  if (formType === "filter-materials") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      state.materialFilters = {
+        q: String(data.get("q") || "").trim(),
+        subjectId: String(data.get("subjectId") || "all"),
+        classId: String(data.get("classId") || "all"),
+        type: String(data.get("type") || "all")
+      };
+      await loadMaterials();
+      render();
+    });
+    return;
+  }
+
+  if (formType === "create-material") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const kind = String(data.get("kind") || "file");
+      const title = String(data.get("title") || "").trim();
+      const description = String(data.get("description") || "").trim();
+      const fileType = String(data.get("fileType") || (kind === "file" ? "pdf" : "link"));
+      const subjectValue = String(data.get("subjectId") || "");
+      const subjectId = subjectValue ? Number(subjectValue) : null;
+      const classIds = data.getAll("classIds").map(Number).filter(Number.isInteger);
+      if (!classIds.length) throw new Error("Select at least one class.");
+
+      const payload = { title, description, kind, fileType, subjectId, classIds };
+      if (kind === "file") {
+        const file = data.get("file");
+        if (!(file instanceof File) || !file.size) throw new Error("Choose a file to upload.");
+        const contentType = file.type || "application/octet-stream";
+        const upload = await api("/materials/upload-url", {
+          method: "POST",
+          body: {
+            fileName: file.name,
+            contentType,
+            sizeBytes: file.size,
+            subjectId,
+            classIds
+          }
+        });
+        const stored = await fetch(upload.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": contentType },
+          body: file
+        });
+        if (!stored.ok) throw new Error("The file could not be uploaded. Please try again.");
+        payload.storagePath = upload.storagePath;
+        payload.fileName = file.name;
+        payload.sizeBytes = file.size;
+        payload.fileType = upload.fileType;
+      } else {
+        payload.linkUrl = String(data.get("linkUrl") || "").trim();
+      }
+
+      await api("/materials", { method: "POST", body: payload });
+      closeModal();
+      await loadMaterials();
+      render();
+      toast("Learning material added.", "success");
+    });
+    return;
+  }
+
   if (formType === "post-announcement") {
     await runForm(form, async () => {
       const data = new FormData(form);
@@ -4654,6 +5016,10 @@ document.addEventListener("click", async event => {
 document.addEventListener("change", async event => {
   if (event.target.closest("[data-question-select]")) {
     updateQuestionSelectionUi();
+    return;
+  }
+  if (event.target.closest("[data-material-kind], [data-material-type]")) {
+    applyMaterialKind();
     return;
   }
 

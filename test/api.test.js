@@ -58,6 +58,7 @@ async function resetDatabase() {
     "class_names",
     "classes",
     "complaints",
+    "materials",
     "meta",
     "questions",
     "quizzes",
@@ -1812,5 +1813,149 @@ test("secured portal end-to-end API flow", async t => {
 
     const results = await teacherAgent.get(`/api/teacher/quizzes/${deleteQuizId}/results`);
     assert.equal(results.status, 404);
+  });
+
+  await t.test("learning materials are class-scoped and soft-deleted", async () => {
+    const outsideClass = await adminAgent
+      .post("/api/admin/classes")
+      .set(CSRF)
+      .send({ name: "Materials Outside Scope" });
+    assert.equal(outsideClass.status, 201);
+    const outsideClassId = outsideClass.body.class.id;
+
+    const adminLink = await adminAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Exam revision video",
+        description: "A short recap before the test.",
+        kind: "link",
+        fileType: "video",
+        subjectId: mathsSubjectId,
+        classIds: [classId],
+        linkUrl: "https://example.com/lesson"
+      });
+    assert.equal(adminLink.status, 201);
+    const adminMaterialId = adminLink.body.material.id;
+
+    const teacherLink = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Week 1 slides",
+        description: "Introduction slides.",
+        kind: "link",
+        fileType: "slides",
+        subjectId: scienceSubjectId,
+        classIds: [classId],
+        linkUrl: "https://example.com/slides"
+      });
+    assert.equal(teacherLink.status, 201);
+    const teacherMaterialId = teacherLink.body.material.id;
+
+    const outOfScope = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Other class notes",
+        kind: "link",
+        fileType: "link",
+        classIds: [outsideClassId],
+        linkUrl: "https://example.com/private"
+      });
+    assert.equal(outOfScope.status, 403);
+
+    const unsafeLink = await adminAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Unsafe link",
+        kind: "link",
+        fileType: "link",
+        classIds: [classId],
+        linkUrl: "javascript:alert(1)"
+      });
+    assert.equal(unsafeLink.status, 400);
+
+    const anonymous = await request(app).get("/api/materials");
+    assert.equal(anonymous.status, 401);
+
+    const studentBlocked = await studentAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Student upload",
+        kind: "link",
+        fileType: "link",
+        classIds: [classId],
+        linkUrl: "https://example.com/student"
+      });
+    assert.equal(studentBlocked.status, 403);
+
+    const studentList = await studentAgent.get("/api/materials");
+    assert.equal(studentList.status, 200);
+    assert.equal(studentList.body.canManage, false);
+    assert.equal(studentList.body.materials.length, 2);
+    assert.ok(studentList.body.materials.every(item => item.classIds.includes(classId)));
+    assert.ok(studentList.body.materials.some(item => item.url === "https://example.com/lesson"));
+
+    const videoOnly = await studentAgent.get("/api/materials?type=video");
+    assert.equal(videoOnly.status, 200);
+    assert.equal(videoOnly.body.materials.length, 1);
+    assert.equal(videoOnly.body.materials[0].id, adminMaterialId);
+
+    const otherClassMaterial = await adminAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Second class only",
+        kind: "link",
+        fileType: "link",
+        classIds: [outsideClassId],
+        linkUrl: "https://example.com/second"
+      });
+    assert.equal(otherClassMaterial.status, 201);
+    const otherMaterialId = otherClassMaterial.body.material.id;
+
+    const otherClassList = await studentAgent.get(`/api/materials?classId=${outsideClassId}`);
+    assert.equal(otherClassList.status, 200);
+    assert.equal(otherClassList.body.materials.length, 0);
+
+    const beforeView = await getDocById("materials", teacherMaterialId);
+    const viewed = await studentAgent
+      .post(`/api/materials/${teacherMaterialId}/view`)
+      .set(CSRF)
+      .send({});
+    assert.equal(viewed.status, 200);
+    const afterView = await getDocById("materials", teacherMaterialId);
+    assert.equal(Number(afterView.views), Number(beforeView.views || 0) + 1);
+
+    const foreignView = await studentAgent
+      .post(`/api/materials/${otherMaterialId}/view`)
+      .set(CSRF)
+      .send({});
+    assert.equal(foreignView.status, 403);
+
+    const removed = await teacherAgent
+      .delete(`/api/materials/${teacherMaterialId}`)
+      .set(CSRF);
+    assert.equal(removed.status, 200);
+    const stored = await getDocById("materials", teacherMaterialId);
+    assert.ok(stored.deleted_at instanceof Date);
+
+    const staffList = await teacherAgent.get("/api/materials");
+    assert.equal(staffList.body.canManage, true);
+    assert.ok(!staffList.body.materials.some(item => item.id === teacherMaterialId));
+
+    const uploadUrl = await teacherAgent
+      .post("/api/materials/upload-url")
+      .set(CSRF)
+      .send({
+        fileName: "notes.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1024,
+        classIds: [classId]
+      });
+    assert.equal(uploadUrl.status, 503);
   });
 });

@@ -14,6 +14,7 @@ const adminRouter = require("./routes/admin");
 const teacherRouter = require("./routes/teacher");
 const studentRouter = require("./routes/student");
 const leaderboardRouter = require("./routes/leaderboard");
+const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const config = require("./config");
@@ -104,6 +105,8 @@ app.use("/api/admin", authenticate, requirePasswordChanged, requireRole("admin")
 app.use("/api/teacher", authenticate, requirePasswordChanged, requireRole("teacher"), teacherRouter);
 app.use("/api/student", authenticate, requirePasswordChanged, requireRole("student"), studentRouter);
 app.use("/api/leaderboard", authenticate, requirePasswordChanged, requireAnyRole("admin", "teacher"), leaderboardRouter);
+// Role checks for materials happen inside the router: staff manage, students read.
+app.use("/api/materials", authenticate, requirePasswordChanged, materialsRouter);
 app.use("/api/submissions", authenticate, requirePasswordChanged, submissionsRouter);
 // Role checks for complaints happen inside the router: participants and admins
 // have different permissions on the same collection.
@@ -173,7 +176,7 @@ app.use((err, req, res, next) => {
     });
   }
 
-  if (err.status >= 400 && err.status < 500) {
+  if (err.status >= 400 && err.status < 600) {
     return res.status(err.status).json({ error: err.message });
   }
 

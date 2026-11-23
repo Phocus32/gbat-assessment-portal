@@ -185,6 +185,77 @@ const questionIdsSchema = z.object({
 
 const leaderboardPeriodSchema = z.enum(["week", "last-week", "all"]).default("week");
 
+const httpUrlSchema = z.string().trim().max(2000).refine(value => {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}, "Enter a valid http(s) link.");
+
+const materialTypeSchema = z.enum(["pdf", "slides", "document", "image", "video", "link"]);
+
+const materialClassIdsSchema = z
+  .array(z.coerce.number().int().positive())
+  .min(1, "Select at least one class.")
+  .max(20, "Too many classes selected.")
+  .refine(ids => new Set(ids).size === ids.length, "Duplicate classes are not allowed.");
+
+const materialUploadUrlSchema = z.object({
+  fileName: z.string().trim().min(1, "Choose a file.").max(180, "File name is too long."),
+  contentType: z.string().trim().min(1).max(120),
+  sizeBytes: z.coerce.number().int().positive().max(
+    Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024,
+    "That file is too large."
+  ),
+  subjectId: idSchema.nullable().optional(),
+  classIds: materialClassIdsSchema
+});
+
+const materialCreateSchema = z.object({
+  title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long."),
+  description: z.string().trim().max(1000, "Description is too long.").optional().default(""),
+  kind: z.enum(["file", "link"]),
+  fileType: materialTypeSchema,
+  subjectId: idSchema.nullable().optional(),
+  classIds: materialClassIdsSchema,
+  storagePath: z.string().trim().min(1).max(400).optional(),
+  fileName: z.string().trim().min(1).max(180).optional(),
+  sizeBytes: z.coerce.number().int().positive().optional(),
+  linkUrl: httpUrlSchema.optional()
+}).superRefine((value, ctx) => {
+  if (value.kind === "file") {
+    for (const field of ["storagePath", "fileName", "sizeBytes"]) {
+      if (value[field] === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Upload the file first." });
+      }
+    }
+    if (["video", "link"].includes(value.fileType)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["fileType"], message: "Use a link for videos." });
+    }
+  } else {
+    if (!value.linkUrl) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["linkUrl"], message: "Enter a link." });
+    }
+  }
+});
+
+const materialUpdateSchema = z.object({
+  title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long.").optional(),
+  description: z.string().trim().max(1000, "Description is too long.").optional(),
+  fileType: materialTypeSchema.optional(),
+  subjectId: idSchema.nullable().optional()
+}).refine(value => Object.keys(value).length > 0, {
+  message: "No changes were supplied."
+});
+
+const materialListSchema = z.object({
+  q: z.string().trim().max(120, "Search term is too long.").optional().default(""),
+  subjectId: z.coerce.number().int().positive().optional(),
+  classId: z.coerce.number().int().positive().optional(),
+  type: materialTypeSchema.optional()
+});
+
 const searchQuerySchema = z.object({
   q: z.string().trim().max(120, "Search term is too long.").optional().default(""),
   classId: z.coerce.number().int().positive().optional()
@@ -242,6 +313,12 @@ module.exports = {
   classMembersSchema,
   questionIdsSchema,
   leaderboardPeriodSchema,
+  httpUrlSchema,
+  materialTypeSchema,
+  materialUploadUrlSchema,
+  materialCreateSchema,
+  materialUpdateSchema,
+  materialListSchema,
   searchQuerySchema,
   settingsSchema
 };
