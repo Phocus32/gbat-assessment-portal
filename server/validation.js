@@ -81,13 +81,15 @@ const userUpdateSchema = z.object({
 const questionCreateSchema = z.object({
   questionText: z.string().trim().min(5, "Question text is too short.").max(4000, "Question text is too long."),
   subjectId: z.coerce.number().int().positive("Choose a subject."),
+  classId: z.coerce.number().int().positive("Choose a class."),
   options: z.array(z.string().trim().min(1, "Options cannot be empty.").max(500, "Option is too long.")).length(4, "Four options are required."),
   correctIndex: z.coerce.number().int().min(0).max(3),
   solution: z.string().trim().min(5, "Worked solution is too short.").max(8000, "Worked solution is too long.")
 });
 
 const questionImportSchema = z.object({
-  subjectId: z.coerce.number().int().positive().optional()
+  subjectId: z.coerce.number().int().positive().optional(),
+  classId: z.coerce.number().int().positive("Choose a class.")
 });
 
 const quizCreateSchema = z.object({
@@ -181,6 +183,10 @@ const questionIdsSchema = z.object({
     .min(1, "Select at least one question.")
     .max(200, "Too many questions selected.")
     .refine(ids => new Set(ids).size === ids.length, "Duplicate questions are not allowed.")
+});
+
+const questionMoveSchema = questionIdsSchema.extend({
+  classId: z.coerce.number().int().positive("Choose a class.")
 });
 
 const leaderboardPeriodSchema = z.enum(["week", "last-week", "all"]).default("week");
@@ -312,6 +318,7 @@ module.exports = {
   complaintStatusSchema,
   classMembersSchema,
   questionIdsSchema,
+  questionMoveSchema,
   leaderboardPeriodSchema,
   httpUrlSchema,
   materialTypeSchema,

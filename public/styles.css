@@ -1408,6 +1408,38 @@ tbody tr:hover {
 
 /* Question bank */
 
+[hidden] {
+  display: none !important;
+}
+
+.question-class-group + .question-class-group {
+  border-top: 2px solid var(--line-strong);
+}
+
+.question-class-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--brand-soft);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.question-class-head h3 {
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.question-class-group .question-group {
+  margin: 0 0 0.4rem 1rem;
+  border-left: 2px solid var(--line);
+}
+
+.question-class-group .question-group-head {
+  background: var(--surface-soft);
+}
+
 .question-preview {
   display: grid;
   gap: 0.55rem;

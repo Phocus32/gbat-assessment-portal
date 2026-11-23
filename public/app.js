@@ -64,6 +64,9 @@ const MATERIAL_ICONS = {
   link: "🔗"
 };
 
+const UNASSIGNED_CLASS_KEY = "unassigned";
+const UNASSIGNED_CLASS_LABEL = "Unassigned / all classes";
+
 const state = {
   user: null,
   data: null,
@@ -88,6 +91,7 @@ const state = {
   leaderboardPeriod: "week",
   materials: null,
   materialFilters: { q: "", subjectId: "all", classId: "all", type: "all" },
+  questionFilters: { q: "", classId: "all", subjectId: "all" },
   progress: null,
   badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
@@ -125,7 +129,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=21";
+const LOGO_MARK = "/logo-mark.svg?v=22";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -369,6 +373,19 @@ function groupSubmissionsByClass(submissions, perClass = Infinity) {
     });
 }
 
+function questionClassId(question) {
+  const value = Number(question && question.classId);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function questionClassName(question) {
+  const classId = questionClassId(question);
+  if (!classId) return UNASSIGNED_CLASS_LABEL;
+  const cls = ((state.data && state.data.classes) || [])
+    .find(item => Number(item.id) === classId);
+  return (cls && cls.name) || question.className || `Class ${classId}`;
+}
+
 function selectedQuestionIds() {
   return [...document.querySelectorAll("[data-question-select]:checked")]
     .map(input => Number(input.value))
@@ -384,10 +401,11 @@ function updateQuestionSelectionUi() {
     if (card) card.classList.toggle("is-selected", box.checked);
   }
 
-  const deleteButton = document.querySelector("[data-action='delete-selected-questions']");
-  if (deleteButton) {
-    deleteButton.disabled = selected.length === 0;
-    const count = deleteButton.querySelector("[data-question-selected-count]");
+  for (const action of ["delete-selected-questions", "move-selected-questions"]) {
+    const button = document.querySelector(`[data-action='${action}']`);
+    if (!button) continue;
+    button.disabled = selected.length === 0;
+    const count = button.querySelector("[data-question-selected-count]");
     if (count) count.textContent = String(selected.length);
   }
 
@@ -405,6 +423,28 @@ function subjectOf(question) {
   return String(question.subject || "General").trim() || "General";
 }
 
+function filteredBankQuestions() {
+  const filters = state.questionFilters;
+  const term = String(filters.q || "").trim().toLowerCase();
+  return ((state.data && state.data.questions) || []).filter(question => {
+    const classId = questionClassId(question);
+    if (filters.classId !== "all") {
+      const matches = filters.classId === UNASSIGNED_CLASS_KEY
+        ? classId === null
+        : classId === Number(filters.classId);
+      if (!matches) return false;
+    }
+    if (filters.subjectId !== "all" && Number(question.subjectId) !== Number(filters.subjectId)) {
+      return false;
+    }
+    if (term) {
+      const haystack = `${question.text} ${subjectOf(question)} ${questionClassName(question)}`.toLowerCase();
+      if (!haystack.includes(term)) return false;
+    }
+    return true;
+  });
+}
+
 function groupQuestionsBySubject(questions) {
   const groups = new Map();
   for (const question of questions) {
@@ -414,6 +454,43 @@ function groupQuestionsBySubject(questions) {
     groups.get(key).questions.push(question);
   }
   return [...groups.values()].sort((a, b) => a.subject.localeCompare(b.subject));
+}
+
+function groupQuestionsByClassAndSubject(questions) {
+  const classGroups = new Map();
+  for (const question of questions) {
+    const classId = questionClassId(question);
+    const key = classId === null ? UNASSIGNED_CLASS_KEY : String(classId);
+    if (!classGroups.has(key)) {
+      classGroups.set(key, {
+        key,
+        id: classId,
+        name: questionClassName(question),
+        subjectGroups: new Map()
+      });
+    }
+    const classGroup = classGroups.get(key);
+    const subject = subjectOf(question);
+    const subjectKey = subject.toLowerCase();
+    if (!classGroup.subjectGroups.has(subjectKey)) {
+      classGroup.subjectGroups.set(subjectKey, { subject, questions: [] });
+    }
+    classGroup.subjectGroups.get(subjectKey).questions.push(question);
+  }
+
+  return [...classGroups.values()]
+    .map(group => ({
+      key: group.key,
+      id: group.id,
+      name: group.name,
+      count: [...group.subjectGroups.values()].reduce((sum, item) => sum + item.questions.length, 0),
+      subjects: [...group.subjectGroups.values()].sort((a, b) => a.subject.localeCompare(b.subject))
+    }))
+    .sort((a, b) => {
+      if (a.id === null) return 1;
+      if (b.id === null) return -1;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 function subjectName(id) {
@@ -446,15 +523,29 @@ function labelTableCells(root = document) {
 function applyFormVisibility() {
   const quizForm = document.querySelector('form[data-form="create-quiz"]');
   if (quizForm) {
-    const select = quizForm.querySelector('select[name="subjectId"]');
-    const subjectId = select ? Number(select.value) : 0;
-    quizForm.querySelectorAll(".check-group").forEach(group => {
-      const match = !subjectId || Number(group.dataset.subjectId) === subjectId;
-      group.hidden = !match;
-      if (!match) group.querySelectorAll('input[name="questionIds"]').forEach(box => {
-        box.checked = false;
-      });
+    const subjectSelect = quizForm.querySelector('select[name="subjectId"]');
+    const classSelect = quizForm.querySelector('select[name="classId"]');
+    const subjectId = subjectSelect ? Number(subjectSelect.value) : 0;
+    const classId = classSelect ? Number(classSelect.value) : 0;
+
+    quizForm.querySelectorAll('input[name="questionIds"]').forEach(box => {
+      const questionClassIdValue = box.dataset.classId === "" || box.dataset.classId === undefined
+        ? null
+        : Number(box.dataset.classId);
+      const matchesSubject = !subjectId || Number(box.dataset.subjectId) === subjectId;
+      const matchesClass = !classId
+        || questionClassIdValue === null
+        || questionClassIdValue === classId;
+      const visible = matchesSubject && matchesClass;
+      box.closest(".check-item").hidden = !visible;
+      if (!visible) box.checked = false;
     });
+
+    quizForm.querySelectorAll(".check-group").forEach(group => {
+      group.hidden = ![...group.querySelectorAll('input[name="questionIds"]')]
+        .some(box => !box.closest(".check-item").hidden);
+    });
+
     const toggle = quizForm.querySelector('[data-action="toggle-all-questions"]');
     if (toggle) {
       const visible = [...quizForm.querySelectorAll('.check-group:not([hidden]) input[name="questionIds"]')];
@@ -1811,16 +1902,53 @@ function renderTeacherOverview() {
 
 function renderTeacherQuestions() {
   const d = state.data;
-  const groups = groupQuestionsBySubject(d.questions);
+  const filters = state.questionFilters;
+  const questions = filteredBankQuestions();
+  const groups = groupQuestionsByClassAndSubject(questions);
+  const classOptions = d.classes.map(cls =>
+    `<option value="${cls.id}" ${String(filters.classId) === String(cls.id) ? "selected" : ""}>${esc(cls.name)}</option>`
+  ).join("");
+  const subjectOptions = d.subjects.map(subject =>
+    `<option value="${subject.id}" ${String(filters.subjectId) === String(subject.id) ? "selected" : ""}>${esc(subject.name)}</option>`
+  ).join("");
+
   return `
     ${pageHead("Question bank", "Questions",
-      "Every quiz receives a copy of its questions, so the bank stays stable after publishing.",
-      d.questions.length ? `
+      "Each class has its own bank, grouped by subject. Published quizzes keep their own copies.",
+      questions.length ? `
         <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-question-selection">Select all</button>
+        <button type="button" class="btn btn-sm" data-action="move-selected-questions" disabled>
+          Move to class (<span data-question-selected-count>0</span>)
+        </button>
         <button type="button" class="btn btn-sm btn-danger" data-action="delete-selected-questions" disabled>
           Delete selected <span data-question-selected-count>0</span>
         </button>` : "")}
     <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">Find questions</h2>
+        <span class="pill">Class · Subject · Search</span>
+      </div>
+      <div class="panel-body">
+        <form class="inline-form" data-form="filter-questions">
+          <label class="sr-only" for="question-bank-search">Search questions</label>
+          <input id="question-bank-search" name="q" type="search" placeholder="Search by question, class or subject" value="${esc(filters.q)}" maxlength="120">
+          <label class="sr-only" for="question-bank-class-filter">Class</label>
+          <select id="question-bank-class-filter" name="classId">
+            <option value="all" ${filters.classId === "all" ? "selected" : ""}>All classes</option>
+            <option value="${UNASSIGNED_CLASS_KEY}" ${filters.classId === UNASSIGNED_CLASS_KEY ? "selected" : ""}>${UNASSIGNED_CLASS_LABEL}</option>
+            ${classOptions}
+          </select>
+          <label class="sr-only" for="question-bank-subject-filter">Subject</label>
+          <select id="question-bank-subject-filter" name="subjectId">
+            <option value="all" ${filters.subjectId === "all" ? "selected" : ""}>All subjects</option>
+            ${subjectOptions}
+          </select>
+          <button type="submit" class="btn btn-primary">Filter</button>
+          <button type="button" class="btn" data-action="clear-question-filters">Clear</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel mt-1">
       <div class="panel-head">
         <h2 class="panel-title">Bulk upload questions</h2>
         <span class="pill">CSV · XLSX · JSON · TXT/MD</span>
@@ -1828,6 +1956,13 @@ function renderTeacherQuestions() {
       <div class="panel-body">
         <form class="form" data-form="import-questions">
           <div class="form-row">
+            <div class="field">
+              <label for="question-import-class">Class</label>
+              <select id="question-import-class" name="classId" required>
+                ${d.classes.map(cls => `<option value="${cls.id}">${esc(cls.name)}</option>`).join("")}
+              </select>
+              <p class="form-note">Every uploaded question is saved to this class.</p>
+            </div>
             <div class="field">
               <label for="question-import-subject">Default subject</label>
               <select id="question-import-subject" name="subjectId" required>
@@ -1849,7 +1984,7 @@ function renderTeacherQuestions() {
               <li class="option-line"><span><strong>TXT/MD:</strong> repeated blocks starting with <code>Question:</code>, followed by A/B/C/D lines, <code>Answer:</code> and <code>Solution:</code>.</span></li>
               <li class="option-line"><span>Answer may be A-D, 1-4, or the exact correct option text.</span></li>
               <li class="option-line"><span>Every question needs four different options and a worked solution of at least 8 words. Missing or weak explanations are rejected.</span></li>
-              <li class="option-line"><span>Questions already in the same subject are skipped. Subjects are never created by an upload.</span></li>
+              <li class="option-line"><span>Questions already in the same class and subject are skipped. Subjects are never created by an upload.</span></li>
             </ul>
           </details>
           <p class="form-note">Templates:
@@ -1868,12 +2003,20 @@ function renderTeacherQuestions() {
       <div class="panel-head"><h2 class="panel-title">Add a question</h2></div>
       <div class="panel-body">
         <form class="form" data-form="add-question">
-          <div class="field">
-            <label for="question-subject">Subject</label>
-            <select id="question-subject" name="subjectId" required>
-              ${availableSubjects().map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
-            </select>
-            <p class="form-note">You can only add questions to subjects assigned to you by the administrator.</p>
+          <div class="form-row">
+            <div class="field">
+              <label for="question-class">Class</label>
+              <select id="question-class" name="classId" required>
+                ${d.classes.map(cls => `<option value="${cls.id}">${esc(cls.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label for="question-subject">Subject</label>
+              <select id="question-subject" name="subjectId" required>
+                ${availableSubjects().map(subject => `<option value="${subject.id}">${esc(subject.name)}</option>`).join("")}
+              </select>
+              <p class="form-note">You can only add questions to subjects assigned to you by the administrator.</p>
+            </div>
           </div>
           <div class="field">
             <label for="question-text">Question</label>
@@ -1909,38 +2052,48 @@ function renderTeacherQuestions() {
     </section>
     <section class="panel mt-1">
       <div class="panel-head">
-        <h2 class="panel-title">${esc(d.questions.length)} question${d.questions.length === 1 ? "" : "s"} in ${esc(groups.length)} group${groups.length === 1 ? "" : "s"}</h2>
+        <h2 class="panel-title">${esc(questions.length)} question${questions.length === 1 ? "" : "s"} in ${esc(groups.length)} class group${groups.length === 1 ? "" : "s"}</h2>
       </div>
-      ${d.questions.length ? groups.map(group => `
-        <section class="question-group">
-          <div class="question-group-head">
-            <h3>${esc(group.subject)}</h3>
-            ${badge(`${group.questions.length} question${group.questions.length === 1 ? "" : "s"}`)}
+      ${questions.length ? groups.map(classGroup => `
+        <section class="question-class-group">
+          <div class="question-class-head">
+            <h3>${esc(classGroup.name)}</h3>
+            ${badge(`${classGroup.count} question${classGroup.count === 1 ? "" : "s"}`)}
           </div>
-          ${group.questions.map(question => `
-            <article class="question-preview">
-              <div class="question-preview-head">
-                <div class="question-preview-title">
-                  <label class="question-select">
-                    <input type="checkbox" data-question-select value="${question.id}" aria-label="Select question ${question.id} for deletion">
-                  </label>
-                  <div>
-                    <h3>${esc(question.text)}</h3>
-                    <span class="cell-sub">Added ${esc(fmtDate(question.createdAt))}</span>
-                  </div>
-                </div>
-                <button type="button" class="btn btn-sm btn-danger" data-action="delete-question" data-id="${question.id}">Delete</button>
+          ${classGroup.subjects.map(group => `
+            <section class="question-group">
+              <div class="question-group-head">
+                <h3>${esc(group.subject)}</h3>
+                ${badge(`${group.questions.length} question${group.questions.length === 1 ? "" : "s"}`)}
               </div>
-              ${diagramHtml(question.diagramSvg)}
-              <ul class="option-lines">
-                ${question.options.map((option, index) => `
-                  <li class="option-line ${index === question.correctIndex ? "correct" : ""}">
-                    <strong>${letter(index)}</strong><span>${esc(option)}</span>
-                  </li>`).join("")}
-              </ul>
-              <div class="solution-box"><strong>Worked solution</strong>${esc(question.solution)}</div>
-            </article>`).join("")}
-        </section>`).join("") : emptyState("No questions yet", "Add a question above to start building your bank.")}
+              ${group.questions.map(question => `
+                <article class="question-preview">
+                  <div class="question-preview-head">
+                    <div class="question-preview-title">
+                      <label class="question-select">
+                        <input type="checkbox" data-question-select value="${question.id}" aria-label="Select question ${question.id} for bulk actions">
+                      </label>
+                      <div>
+                        <h3>${esc(question.text)}</h3>
+                        <span class="cell-sub">Added ${esc(fmtDate(question.createdAt))}</span>
+                      </div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-danger" data-action="delete-question" data-id="${question.id}">Delete</button>
+                  </div>
+                  ${diagramHtml(question.diagramSvg)}
+                  <ul class="option-lines">
+                    ${question.options.map((option, index) => `
+                      <li class="option-line ${index === question.correctIndex ? "correct" : ""}">
+                        <strong>${letter(index)}</strong><span>${esc(option)}</span>
+                      </li>`).join("")}
+                  </ul>
+                  <div class="solution-box"><strong>Worked solution</strong>${esc(question.solution)}</div>
+                </article>`).join("")}
+            </section>`).join("")}
+        </section>`).join("") : emptyState(
+          d.questions.length ? "No matching questions" : "No questions yet",
+          d.questions.length ? "Try another class, subject or search term." : "Add a question above to start building your bank."
+        )}
     </section>`;
 }
 
@@ -2018,6 +2171,7 @@ function renderTeacherQuizzes() {
                 <span class="field-label">Questions</span>
                 <button type="button" class="link-btn" data-action="toggle-all-questions">Select all</button>
               </div>
+              <p class="form-note">Only questions for the selected class and subject are available. Unassigned questions can be used by every class.</p>
               <div class="checkbox-groups">
                 ${groups.map(group => `
                   <section class="check-group" data-subject-id="${group.questions[0] && group.questions[0].subjectId || ""}">
@@ -2028,10 +2182,11 @@ function renderTeacherQuizzes() {
                     <div class="checkbox-grid">
                       ${group.questions.map(question => `
                         <label class="check-item">
-                          <input type="checkbox" name="questionIds" value="${question.id}">
+                          <input type="checkbox" name="questionIds" value="${question.id}" data-subject-id="${question.subjectId || ""}" data-class-id="${questionClassId(question) || ""}">
                           <span>
                             <strong>${esc(question.text)}</strong>
                             <small>${esc(question.options.length)} options</small>
+                            <small>${esc(questionClassName(question))}</small>
                           </span>
                         </label>`).join("")}
                     </div>
@@ -3665,12 +3820,13 @@ function openQuestionImportResult(result) {
       ${shownCreated.length ? `
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Row</th><th>Question</th><th>Subject</th></tr></thead>
+            <thead><tr><th>Row</th><th>Question</th><th>Class</th><th>Subject</th></tr></thead>
             <tbody>
               ${shownCreated.map(item => `
                 <tr>
                   <td>${esc(item.rowNumber)}</td>
                   <td><strong>${esc(item.question)}</strong></td>
+                  <td>${esc(item.className || "Selected class")}</td>
                   <td>${esc(item.subject)}</td>
                 </tr>`).join("")}
             </tbody>
@@ -4087,6 +4243,36 @@ function openMoveStudent(studentId) {
     </div>`);
 }
 
+function openMoveQuestionsDialog(ids) {
+  if (!ids.length) return;
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Move questions to a class</h2>
+        <p>${esc(ids.length)} selected question${ids.length === 1 ? "" : "s"} will move together.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="move-questions">
+        ${ids.map(id => `<input type="hidden" name="ids" value="${id}">`).join("")}
+        <div class="field">
+          <label for="question-move-class">Class</label>
+          <select id="question-move-class" name="classId" required>
+            <option value="">Choose a class</option>
+            ${(state.data.classes || []).map(cls => `<option value="${cls.id}">${esc(cls.name)}</option>`).join("")}
+          </select>
+          <p class="form-note">Questions keep their subject. Quizzes already published keep their own copies.</p>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Move questions</button>
+        </div>
+      </form>
+    </div>`);
+}
+
 /* Actions */
 
 async function runAction(button) {
@@ -4118,6 +4304,11 @@ async function runAction(button) {
       return;
     case "open-material-dialog":
       openMaterialDialog();
+      return;
+    case "clear-question-filters":
+      state.questionFilters = { q: "", classId: "all", subjectId: "all" };
+      render();
+      focusAfterRender("#question-bank-search");
       return;
     case "clear-material-filters":
       state.materialFilters = { q: "", subjectId: "all", classId: "all", type: "all" };
@@ -4200,7 +4391,8 @@ async function runAction(button) {
       downloadImportCredentials();
       return;
     case "toggle-all-questions": {
-      const boxes = [...document.querySelectorAll('form[data-form="create-quiz"] .check-group:not([hidden]) input[name="questionIds"]')];
+      const boxes = [...document.querySelectorAll('form[data-form="create-quiz"] input[name="questionIds"]')]
+        .filter(box => !box.closest(".check-item").hidden && !box.closest(".check-group").hidden);
       if (!boxes.length) return;
       const selectAll = !boxes.every(box => box.checked);
       boxes.forEach(box => {
@@ -4348,6 +4540,12 @@ async function runAction(button) {
       const selectAll = boxes.some(box => !box.checked);
       for (const box of boxes) box.checked = selectAll;
       updateQuestionSelectionUi();
+      return;
+    }
+    case "move-selected-questions": {
+      const ids = selectedQuestionIds();
+      if (!ids.length) return;
+      openMoveQuestionsDialog(ids);
       return;
     }
     case "delete-selected-questions": {
@@ -4834,6 +5032,21 @@ async function handleSubmit(form) {
     return;
   }
 
+  if (formType === "move-questions") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const ids = data.getAll("ids").map(value => Number(value));
+      const classId = Number(data.get("classId"));
+      if (!ids.length) throw new Error("Select at least one question.");
+      if (!classId) throw new Error("Choose a class.");
+      await api("/teacher/questions/move", { method: "POST", body: { ids, classId } });
+      closeModal();
+      await refresh();
+      toast(`${ids.length} question${ids.length === 1 ? "" : "s"} moved.`, "success");
+    });
+    return;
+  }
+
   if (formType === "import-questions") {
     await runForm(form, async () => {
       const data = new FormData(form);
@@ -4841,6 +5054,7 @@ async function handleSubmit(form) {
       if (!(file instanceof File) || !file.size) throw new Error("Choose a question file to upload.");
       const upload = new FormData();
       upload.append("file", file, file.name);
+      upload.append("classId", String(data.get("classId") || ""));
       upload.append("subjectId", String(data.get("subjectId") || ""));
       const result = await api("/teacher/questions/import", { method: "POST", formData: upload });
       form.reset();
@@ -4856,6 +5070,7 @@ async function handleSubmit(form) {
       const options = [0, 1, 2, 3].map(index => String(data.get(`option${index}`) || "").trim());
       const body = {
         questionText: String(data.get("questionText") || "").trim(),
+        classId: Number(data.get("classId")),
         subjectId: Number(data.get("subjectId")),
         options,
         correctIndex: Number(data.get("correctIndex")),
@@ -4915,6 +5130,20 @@ async function handleSubmit(form) {
       closeModal();
       await refresh();
       toast("Quiz schedule updated.", "success");
+    });
+    return;
+  }
+
+  if (formType === "filter-questions") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      state.questionFilters = {
+        q: String(data.get("q") || "").trim(),
+        classId: String(data.get("classId") || "all"),
+        subjectId: String(data.get("subjectId") || "all")
+      };
+      render();
+      focusAfterRender("#question-bank-search");
     });
     return;
   }
@@ -5046,6 +5275,11 @@ document.addEventListener("change", async event => {
     } catch (error) {
       toast(error.message, "error");
     }
+    return;
+  }
+
+  if (event.target.closest('form[data-form="create-quiz"] select[name="classId"]')) {
+    applyFormVisibility();
     return;
   }
 

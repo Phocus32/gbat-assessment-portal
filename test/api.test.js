@@ -344,6 +344,7 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "What is 7 + 5?",
+        classId,
         subjectId: mathsSubjectId,
         options: ["10", "12", "14", "9"],
         correctIndex: 1,
@@ -358,6 +359,7 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "Which number is even?",
+        classId,
         subjectId: mathsSubjectId,
         options: ["3", "5", "8", "9"],
         correctIndex: 2,
@@ -372,6 +374,7 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "Which force keeps planets in orbit?",
+        classId,
         subjectId: scienceSubjectId,
         options: ["Gravity", "Magnetism", "Friction", "Tension"],
         correctIndex: 0,
@@ -385,6 +388,7 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "What is photosynthesis?",
+        classId,
         subjectId: scienceSubjectId,
         options: ["Respiration", "Photosynthesis", "Digestion", "Condensation"],
         correctIndex: 1,
@@ -428,6 +432,116 @@ test("secured portal end-to-end API flow", async t => {
         questionIds: [firstQuestionId]
       });
     assert.equal(otherTeacherQuiz.status, 400);
+  });
+
+  await t.test("question bank assigns classes, groups by subject and supports bulk moves", async () => {
+    const missingClass = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is 3 times 6?",
+        subjectId: mathsSubjectId,
+        options: ["12", "16", "18", "24"],
+        correctIndex: 2,
+        solution: "Three multiplied by six is eighteen."
+      });
+    assert.equal(missingClass.status, 400);
+
+    const otherClass = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is 45 divided by 9?",
+        classId: secondClassId,
+        subjectId: mathsSubjectId,
+        options: ["4", "5", "6", "7"],
+        correctIndex: 1,
+        solution: "Nine multiplied by five is forty-five."
+      });
+    assert.equal(otherClass.status, 201);
+    assert.equal(otherClass.body.question.classId, secondClassId);
+
+    const wrongClassQuiz = await teacherAgent
+      .post("/api/teacher/quizzes")
+      .set(CSRF)
+      .send({
+        title: "Wrong class bank",
+        classId,
+        subjectId: mathsSubjectId,
+        minutes: 10,
+        questionIds: [otherClass.body.question.id]
+      });
+    assert.equal(wrongClassQuiz.status, 400);
+
+    const legacy = await insertDoc("questions", {
+      question_text: "What is 2 plus 2?",
+      options: ["2", "3", "4", "5"],
+      correct_index: 2,
+      solution: "Adding two and two gives four.",
+      subject_id: mathsSubjectId,
+      subject: "Mathematics",
+      created_by: teacher1Id,
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+    const movableFirst = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is 6 times 8?",
+        classId,
+        subjectId: mathsSubjectId,
+        options: ["42", "46", "48", "54"],
+        correctIndex: 2,
+        solution: "Six times eight is forty-eight."
+      });
+    const movableSecond = await teacherAgent
+      .post("/api/teacher/questions")
+      .set(CSRF)
+      .send({
+        questionText: "What is 72 divided by 8?",
+        classId,
+        subjectId: mathsSubjectId,
+        options: ["7", "8", "9", "10"],
+        correctIndex: 2,
+        solution: "Eight times nine is seventy-two."
+      });
+    assert.equal(movableFirst.status, 201);
+    assert.equal(movableSecond.status, 201);
+    const ids = [movableFirst.body.question.id, movableSecond.body.question.id];
+
+    const deniedMove = await teacher2Agent
+      .post("/api/teacher/questions/move")
+      .set(CSRF)
+      .send({ ids, classId: secondClassId });
+    assert.equal(deniedMove.status, 403);
+    assert.equal((await getDocById("questions", ids[0])).class_id, classId);
+
+    const moved = await teacherAgent
+      .post("/api/teacher/questions/move")
+      .set(CSRF)
+      .send({ ids, classId: secondClassId });
+    assert.equal(moved.status, 200);
+    assert.deepEqual(moved.body, {
+      ok: true,
+      moved: 2,
+      classId: secondClassId,
+      className: "Basic 8B"
+    });
+
+    const bootstrap = await teacherAgent.get("/api/teacher/bootstrap");
+    const byId = new Map(bootstrap.body.questions.map(item => [Number(item.id), item]));
+    assert.equal(byId.get(ids[0]).classId, secondClassId);
+    assert.equal(byId.get(ids[0]).className, "Basic 8B");
+    assert.equal(byId.get(ids[1]).classId, secondClassId);
+    assert.equal(byId.get(legacy).classId, null);
+    assert.equal(byId.get(legacy).className, null);
+
+    const invalidMove = await teacherAgent
+      .post("/api/teacher/questions/move")
+      .set(CSRF)
+      .send({ ids, classId: 999999 });
+    assert.equal(invalidMove.status, 400);
   });
 
   await t.test("quiz begin and end times gate student access", async () => {
@@ -534,6 +648,7 @@ test("secured portal end-to-end API flow", async t => {
     const response = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(csv, "utf8"), {
         filename: "questions.csv",
@@ -548,10 +663,32 @@ test("secured portal end-to-end API flow", async t => {
     const mathsQuestions = await listWhere("questions", "subject_id", mathsSubjectId);
     assert.ok(mathsQuestions.some(item => item.question_text === "What is 9 + 4?" && item.correct_index === 1));
     assert.ok(mathsQuestions.some(item => item.question_text === "Which shape has three sides?" && item.correct_index === 2));
+    assert.ok(response.body.created.every(item => item.classId === classId && item.className === "Basic 8A - Gold"));
+    assert.ok(mathsQuestions
+      .filter(item => ["What is 9 + 4?", "Which shape has three sides?"].includes(item.question_text) && item.created_by === teacher1Id)
+      .every(item => item.class_id === classId));
+
+    const sameQuestionCsv = csvRows([
+      headers,
+      ["What is 9 + 4?", "11", "13", "14", "15", "B", "Adding nine and four still gives thirteen for the second class question.", "", ""]
+    ]);
+    const secondClassImport = await teacherAgent
+      .post("/api/teacher/questions/import")
+      .set(CSRF)
+      .field("classId", String(secondClassId))
+      .field("subjectId", String(mathsSubjectId))
+      .attach("file", Buffer.from(sameQuestionCsv, "utf8"), {
+        filename: "questions-second-class.csv",
+        contentType: "text/csv"
+      });
+    assert.equal(secondClassImport.status, 200);
+    assert.equal(secondClassImport.body.summary.created, 1);
+    assert.equal(secondClassImport.body.created[0].classId, secondClassId);
 
     const missing = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId));
     assert.equal(missing.status, 400);
   });
@@ -583,6 +720,7 @@ test("secured portal end-to-end API flow", async t => {
     const unassignedRow = await teacher2Agent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(scienceCsv, "utf8"), {
         filename: "science.csv",
@@ -596,6 +734,7 @@ test("secured portal end-to-end API flow", async t => {
     const unassignedDefault = await teacher2Agent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(scienceSubjectId))
       .attach("file", Buffer.from(plainCsv, "utf8"), {
         filename: "questions.csv",
@@ -631,6 +770,7 @@ test("secured portal end-to-end API flow", async t => {
     const jsonResponse = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(JSON.stringify(jsonPayload), "utf8"), {
         filename: "questions.json",
@@ -665,6 +805,7 @@ test("secured portal end-to-end API flow", async t => {
     const mdResponse = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(markdown, "utf8"), {
         filename: "questions.md",
@@ -688,6 +829,7 @@ test("secured portal end-to-end API flow", async t => {
     const txtResponse = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(txt, "utf8"), {
         filename: "questions.txt",
@@ -716,6 +858,7 @@ test("secured portal end-to-end API flow", async t => {
     const response = await teacherAgent
       .post("/api/teacher/questions/import")
       .set(CSRF)
+      .field("classId", String(classId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(await workbook.xlsx.writeBuffer()), {
         filename: "questions.xlsx",
@@ -914,6 +1057,24 @@ test("secured portal end-to-end API flow", async t => {
       .send({ classId: secondClassId });
     assert.equal(deniedMove.status, 403);
 
+    const createSecondClassQuestion = async questionText => {
+      const created = await teacherAgent
+        .post("/api/teacher/questions")
+        .set(CSRF)
+        .send({
+          questionText,
+          classId: secondClassId,
+          subjectId: mathsSubjectId,
+          options: ["4", "6", "8", "10"],
+          correctIndex: 2,
+          solution: "Multiplying two by four gives eight."
+        });
+      assert.equal(created.status, 201);
+      return created.body.question.id;
+    };
+    const secondClassFirst = await createSecondClassQuestion("What is 2 times 4?");
+    const secondClassSecond = await createSecondClassQuestion("What is 16 divided by 2?");
+
     const secondQuiz = await teacherAgent
       .post("/api/teacher/quizzes")
       .set(CSRF)
@@ -922,7 +1083,7 @@ test("secured portal end-to-end API flow", async t => {
         classId: secondClassId,
         subjectId: mathsSubjectId,
         minutes: 20,
-        questionIds: [firstQuestionId, secondQuestionId]
+        questionIds: [secondClassFirst, secondClassSecond]
       });
     assert.equal(secondQuiz.status, 201);
 
@@ -1679,6 +1840,7 @@ test("secured portal end-to-end API flow", async t => {
         .set(CSRF)
         .send({
           questionText,
+          classId,
           subjectId: mathsSubjectId,
           options: ["24", "25", "26", "27"],
           correctIndex: 1,
@@ -1751,6 +1913,7 @@ test("secured portal end-to-end API flow", async t => {
       .set(CSRF)
       .send({
         questionText: "What is 11 plus 4?",
+        classId,
         subjectId: mathsSubjectId,
         options: ["14", "15", "16", "17"],
         correctIndex: 1,

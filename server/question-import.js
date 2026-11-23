@@ -495,7 +495,7 @@ function validateSolution(value) {
   return null;
 }
 
-function validateRecord(record, resolveSubject) {
+function validateRecord(record, resolveSubject, classId) {
   if (record.invalidItem) {
     return { error: "Each JSON item must be a question object." };
   }
@@ -540,6 +540,7 @@ function validateRecord(record, resolveSubject) {
   const parsed = questionCreateSchema.safeParse({
     questionText,
     subjectId,
+    classId,
     options,
     correctIndex,
     solution
@@ -560,7 +561,7 @@ function validateRecord(record, resolveSubject) {
   };
 }
 
-async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultSubjectId } = {}) {
+async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultSubjectId, defaultClassId } = {}) {
   const records = await parseQuestionFile(buffer, originalName);
   const allowed = subjectIdsOf(actor);
   if (!allowed.length) {
@@ -570,6 +571,10 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
   const fallbackId = defaultSubjectId ? Number(defaultSubjectId) : null;
   if (fallbackId && !allowed.includes(fallbackId)) {
     throw new QuestionImportError("That subject is not assigned to your account.", 403);
+  }
+  const classId = defaultClassId ? Number(defaultClassId) : null;
+  if (!Number.isInteger(classId) || classId <= 0) {
+    throw new QuestionImportError("Choose a class for the uploaded questions.", 400);
   }
 
   const names = await subjectMap();
@@ -595,8 +600,10 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
   }
 
   const existing = await listWhereIn("questions", "subject_id", allowed);
+  const duplicateKey = (subjectId, classValue, text) =>
+    `${classValue === null || classValue === undefined ? "unassigned" : Number(classValue)}|${Number(subjectId)}|${normalizedQuestion(text)}`;
   const seen = new Set(existing.map(question =>
-    `${Number(question.subject_id)}|${normalizedQuestion(question.question_text)}`
+    duplicateKey(question.subject_id, question.class_id, question.question_text)
   ));
 
   const created = [];
@@ -605,16 +612,16 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
 
   for (const record of records) {
     const preview = normalizeWhitespace(record.question).slice(0, 160) || "Unknown question";
-    const checked = validateRecord(record, resolveSubject);
+    const checked = validateRecord(record, resolveSubject, classId);
     if (checked.error) {
       failed.push({ rowNumber: record.rowNumber, question: preview, reason: checked.error });
       continue;
     }
 
     const value = checked.value;
-    const key = `${value.subjectId}|${normalizedQuestion(value.questionText)}`;
+    const key = duplicateKey(value.subjectId, classId, value.questionText);
     if (seen.has(key)) {
-      skipped.push({ rowNumber: record.rowNumber, question: value.questionText, reason: "This question already exists in that subject." });
+      skipped.push({ rowNumber: record.rowNumber, question: value.questionText, reason: "This question already exists in that class and subject." });
       continue;
     }
     seen.add(key);
@@ -626,6 +633,7 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
       solution: value.solution,
       subject_id: value.subjectId,
       subject: names.get(value.subjectId) || "General",
+      class_id: classId,
       diagram_svg: value.diagram,
       created_by: actor.id,
       created_at: new Date(),
@@ -637,7 +645,8 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
       questionId,
       question: value.questionText,
       subjectId: value.subjectId,
-      subject: names.get(value.subjectId) || "General"
+      subject: names.get(value.subjectId) || "General",
+      classId
     });
   }
 
@@ -662,10 +671,10 @@ async function importQuestionsFromBuffer(buffer, originalName, { actor, defaultS
 const TEXT_TEMPLATE = `Learners Connect question import template (TXT/MD)
 
 Start each question with "Question: ...". Blank lines are allowed. Use A., B.,
-C. and D. for the four options, then Answer: and Solution:. The subject line is
-optional when you choose a default subject in the portal. An answer may be A-D,
-1-4, or the exact option text. The solution must explain the reasoning in at
-least 8 words.
+C. and D. for the four options, then Answer: and Solution:. Choose a class and
+default subject in the portal; every row is saved to that class, and the subject
+line is optional. An answer may be A-D, 1-4, or the exact option text. The
+solution must explain the reasoning in at least 8 words.
 
 ## Question 1
 Question: What is 6 times 7?

@@ -37,6 +37,7 @@ const {
   questionCreateSchema,
   questionImportSchema,
   questionIdsSchema,
+  questionMoveSchema,
   quizCreateSchema,
   quizUpdateSchema,
   announcementCreateSchema,
@@ -50,7 +51,10 @@ const uploadQuestions = multer({
   limits: { fileSize: 5 * 1024 * 1024, files: 1 }
 });
 
-function mapQuestion(row) {
+function mapQuestion(row, classMap = new Map()) {
+  const classId = row.class_id === null || row.class_id === undefined
+    ? null
+    : Number(row.class_id);
   return {
     id: row.id,
     text: row.question_text,
@@ -59,11 +63,23 @@ function mapQuestion(row) {
     solution: row.solution,
     subject: row.subject || "General",
     subjectId: row.subject_id || null,
+    classId,
+    className: classId ? (classMap.get(classId) || null) : null,
     diagramSvg: row.diagram_svg || null,
     creatorId: row.created_by,
     creatorName: row.creator_name || null,
     createdAt: row.created_at
   };
+}
+
+async function assertClassExists(classId) {
+  const cls = await getDocById("classes", classId);
+  if (!cls) {
+    const error = new Error("Class not found.");
+    error.status = 400;
+    throw error;
+  }
+  return cls;
 }
 
 async function loadOwnedQuiz(quizId, teacherId) {
@@ -321,7 +337,7 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     subjects,
     questions: questions
       .sort((a, b) => Number(b.id) - Number(a.id))
-      .map(question => mapQuestion({ ...question, creator_name: req.user.name })),
+      .map(question => mapQuestion({ ...question, creator_name: req.user.name }, classMap)),
     quizzes: quizzes.map(quiz => {
       const window = quizWindow(quiz);
       return {
@@ -413,15 +429,21 @@ router.post("/questions/import", uploadQuestions.single("file"), asyncHandler(as
   if (!req.file) throw new QuestionImportError("Choose a question file to upload.");
 
   const fallback = req.body && req.body.subjectId ? req.body.subjectId : undefined;
-  const input = questionImportSchema.parse({ subjectId: fallback });
+  const classFallback = req.body && req.body.classId ? req.body.classId : undefined;
+  const input = questionImportSchema.parse({ subjectId: fallback, classId: classFallback });
   if (input.subjectId && !(await assertSubjectsAllowed([input.subjectId], req.user))) {
     return res.status(403).json({ error: "That subject is not assigned to your account." });
   }
+  const cls = await assertClassExists(input.classId);
 
   const result = await importQuestionsFromBuffer(req.file.buffer, req.file.originalname, {
     actor: req.user,
-    defaultSubjectId: input.subjectId
+    defaultSubjectId: input.subjectId,
+    defaultClassId: input.classId
   });
+  for (const item of result.created) {
+    item.className = cls.name;
+  }
   return res.json(result);
 }));
 
@@ -431,7 +453,7 @@ router.post("/questions", asyncHandler(async (req, res) => {
     return res.status(403).json({ error: "That subject is not assigned to your account." });
   }
 
-  const names = await subjectMap();
+  const [names, cls] = await Promise.all([subjectMap(), assertClassExists(input.classId)]);
   const subjectName = names.get(Number(input.subjectId)) || "General";
   const questionId = await insertDoc("questions", {
     question_text: input.questionText,
@@ -440,12 +462,13 @@ router.post("/questions", asyncHandler(async (req, res) => {
     solution: input.solution,
     subject_id: Number(input.subjectId),
     subject: subjectName,
+    class_id: Number(input.classId),
     diagram_svg: null,
     created_by: req.user.id,
     created_at: new Date(),
     updated_at: new Date()
   });
-  await logActivity(req.user, `Added a question to ${subjectName}`);
+  await logActivity(req.user, `Added a question to ${subjectName} for ${cls.name}`);
   return res.status(201).json({
     question: {
       id: questionId,
@@ -455,6 +478,8 @@ router.post("/questions", asyncHandler(async (req, res) => {
       solution: input.solution,
       subject: subjectName,
       subjectId: Number(input.subjectId),
+      classId: Number(input.classId),
+      className: cls.name,
       creatorId: req.user.id,
       creatorName: req.user.name,
       createdAt: new Date().toISOString()
@@ -462,9 +487,9 @@ router.post("/questions", asyncHandler(async (req, res) => {
   });
 }));
 
-// Deleting from the bank never touches published quizzes: each quiz receives
-// its own copy of the questions when it is created.
-async function checkQuestionsDeletable(ids, user) {
+// Bank changes never touch published quizzes: each quiz receives its own copy
+// of the questions when it is created.
+async function checkQuestionsMutable(ids, user, action = "delete") {
   const targets = await getManyByIds("questions", ids);
   if (targets.length !== ids.length) {
     return { error: { status: 404, message: "Question not found." } };
@@ -474,7 +499,7 @@ async function checkQuestionsDeletable(ids, user) {
   for (const id of ids) {
     const target = byId.get(Number(id));
     if (Number(target.created_by) !== Number(user.id)) {
-      return { error: { status: 403, message: "You can only delete questions that you created." } };
+      return { error: { status: 403, message: `You can only ${action} questions that you created.` } };
     }
   }
 
@@ -486,9 +511,30 @@ async function checkQuestionsDeletable(ids, user) {
   return { targets };
 }
 
+router.post("/questions/move", asyncHandler(async (req, res) => {
+  const input = questionMoveSchema.parse(req.body);
+  const { error } = await checkQuestionsMutable(input.ids, req.user, "move");
+  if (error) return res.status(error.status).json({ error: error.message });
+  const cls = await assertClassExists(input.classId);
+
+  for (const id of input.ids) {
+    await updateDocById("questions", id, {
+      class_id: Number(input.classId),
+      updated_at: new Date()
+    });
+  }
+  await logActivity(req.user, `Moved ${input.ids.length} question${input.ids.length === 1 ? "" : "s"} to ${cls.name}`);
+  return res.json({
+    ok: true,
+    moved: input.ids.length,
+    classId: Number(input.classId),
+    className: cls.name
+  });
+}));
+
 router.delete("/questions", asyncHandler(async (req, res) => {
   const input = questionIdsSchema.parse(req.body);
-  const { error } = await checkQuestionsDeletable(input.ids, req.user);
+  const { error } = await checkQuestionsMutable(input.ids, req.user, "delete");
   if (error) return res.status(error.status).json({ error: error.message });
 
   for (const id of input.ids) await deleteDocById("questions", id);
@@ -498,7 +544,7 @@ router.delete("/questions", asyncHandler(async (req, res) => {
 
 router.delete("/questions/:id", asyncHandler(async (req, res) => {
   const questionId = idSchema.parse(req.params.id);
-  const { error } = await checkQuestionsDeletable([questionId], req.user);
+  const { error } = await checkQuestionsMutable([questionId], req.user, "delete");
   if (error) return res.status(error.status).json({ error: error.message });
 
   await deleteDocById("questions", questionId);
@@ -555,16 +601,20 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
   const questionDocs = await getManyByIds("questions", input.questionIds);
   const questionMap = new Map(
     questionDocs
-      .filter(question =>
-        Number(question.created_by) === Number(req.user.id) &&
-        Number(question.subject_id) === Number(input.subjectId)
-      )
+      .filter(question => {
+        const questionClassId = question.class_id === null || question.class_id === undefined
+          ? null
+          : Number(question.class_id);
+        return Number(question.created_by) === Number(req.user.id)
+          && Number(question.subject_id) === Number(input.subjectId)
+          && (questionClassId === null || questionClassId === Number(input.classId));
+      })
       .map(question => [Number(question.id), question])
   );
 
   const ordered = input.questionIds.map(id => questionMap.get(Number(id)));
   if (ordered.some(row => !row)) {
-    return res.status(400).json({ error: "One or more selected questions no longer exist in that subject." });
+    return res.status(400).json({ error: "One or more selected questions are not available for that class and subject." });
   }
 
   const names = await subjectMap();
