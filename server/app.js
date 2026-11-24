@@ -188,6 +188,28 @@ app.get("/api/health/storage", asyncHandler(async (req, res) => {
   }
 }));
 
+// Temporary one-time setup for this deployment: creates the default Firebase
+// Storage bucket when the project has none. Remove after verification.
+app.get("/api/health/storage-setup", asyncHandler(async (req, res) => {
+  const bucketName = `${config.firebase.projectId}.firebasestorage.app`;
+  const masked = String(bucketName).split(".").map((part, index, parts) =>
+    index === 0 || index === parts.length - 1 ? part : "***"
+  ).join(".");
+  try {
+    const { getStorage } = require("firebase-admin/storage");
+    const storage = getStorage();
+    const client = storage.storageClient || storage;
+    await client.createBucket(bucketName, { location: "US", storageClass: "STANDARD" });
+    return res.json({ ok: true, created: true, bucket: masked });
+  } catch (error) {
+    const message = String(error && error.message || "");
+    if (error && (error.code === 409 || /already exists/i.test(message))) {
+      return res.json({ ok: true, created: false, bucket: masked });
+    }
+    return res.status(500).json({ ok: false, error: message.slice(0, 300) });
+  }
+}));
+
 app.use("/api/auth", authRouter);
 
 app.use("/api/admin", authenticate, requirePasswordChanged, requireRole("admin"), adminRouter);

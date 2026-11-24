@@ -137,8 +137,8 @@ async function resolveBucketName() {
     // Listing requires an extra IAM permission; keep the old fallback below.
   }
 
-  resolvedBucketName = config.firebase.storageBucket || candidates[0];
-  return resolvedBucketName;
+  // Do not cache a guessed name: a bucket can be created after a cold start.
+  return config.firebase.storageBucket || candidates[0];
 }
 
 /**
