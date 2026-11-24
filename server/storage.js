@@ -92,25 +92,51 @@ let resolvedBucketName = null;
  * set FIREBASE_STORAGE_BUCKET still target the real bucket.
  */
 async function resolveBucketName() {
-  if (config.firebase.storageBucket) return config.firebase.storageBucket;
   if (resolvedBucketName) return resolvedBucketName;
 
   getApp();
   const { getStorage } = require("firebase-admin/storage");
-  const candidates = candidateBucketNames();
+  const storage = getStorage();
+
+  // A configured bucket can be stale (for example after a Firebase bucket was
+  // renamed), so verify it instead of trusting it blindly.
+  const candidates = [...new Set([
+    ...(config.firebase.storageBucket ? [config.firebase.storageBucket] : []),
+    `${config.firebase.projectId}.appspot.com`,
+    `${config.firebase.projectId}.firebasestorage.app`
+  ])];
   for (const name of candidates) {
     try {
-      await getStorage().bucket(name).getMetadata();
+      await storage.bucket(name).getMetadata();
       resolvedBucketName = name;
       return name;
-    } catch (error) {
-      // 404 means the bucket does not exist. Any other error (for example a
-      // service account without bucket.get) means probing is unreliable, so
-      // fall back to the legacy name instead of failing every upload.
-      if (!error || error.code !== 404) break;
+    } catch {
+      // Try the next naming convention.
     }
   }
-  resolvedBucketName = candidates[0];
+
+  // The bucket name does not always match the project ID. Ask Google Cloud for
+  // the buckets in this project before falling back to a guessed name.
+  try {
+    const [buckets] = await storage.getBuckets({ projectId: config.firebase.projectId });
+    const projectPrefix = String(config.firebase.projectId || "").split("-")[0];
+    const names = buckets
+      .map(bucket => bucket && bucket.name)
+      .filter(name => typeof name === "string" && name)
+      .sort((a, b) => {
+        const preferred = name => name.includes(config.firebase.projectId) ||
+          (projectPrefix && name.startsWith(projectPrefix)) ? 0 : 1;
+        return preferred(a) - preferred(b);
+      });
+    if (names.length) {
+      resolvedBucketName = names[0];
+      return resolvedBucketName;
+    }
+  } catch {
+    // Listing requires an extra IAM permission; keep the old fallback below.
+  }
+
+  resolvedBucketName = config.firebase.storageBucket || candidates[0];
   return resolvedBucketName;
 }
 
