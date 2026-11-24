@@ -130,7 +130,9 @@ app.get("/api/health/storage", asyncHandler(async (req, res) => {
     report.redirectOrigin = new URL(form.fields.success_action_redirect).origin;
     try {
       const { getStorage } = require("firebase-admin/storage");
-      const [buckets] = await getStorage().getBuckets({ projectId: config.firebase.projectId });
+      const storage = getStorage();
+      const client = storage.storageClient || storage;
+      const [buckets] = await client.getBuckets({ projectId: config.firebase.projectId });
       report.projectBuckets = buckets.map(item => maskBucket(item.name));
     } catch (error) {
       report.bucketListError = error.message;

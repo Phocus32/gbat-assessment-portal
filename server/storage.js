@@ -118,7 +118,8 @@ async function resolveBucketName() {
   // The bucket name does not always match the project ID. Ask Google Cloud for
   // the buckets in this project before falling back to a guessed name.
   try {
-    const [buckets] = await storage.getBuckets({ projectId: config.firebase.projectId });
+    const client = storage.storageClient || storage;
+    const [buckets] = await client.getBuckets({ projectId: config.firebase.projectId });
     const projectPrefix = String(config.firebase.projectId || "").split("-")[0];
     const names = buckets
       .map(bucket => bucket && bucket.name)
