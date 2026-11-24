@@ -109,19 +109,32 @@ app.get("/api/health", (req, res) => {
 app.get("/api/health/storage", asyncHandler(async (req, res) => {
   const origin = `${req.protocol}://${req.get("host")}`;
   const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
-  const report = { ok: false, bucket: null, formHost: null, fieldCount: 0, redirectOrigin: null };
+  const report = { ok: false, bucket: null, formHost: null, formPath: null, fieldCount: 0, redirectOrigin: null };
+  const maskBucket = name => {
+    const parts = String(name || "").split(".");
+    return parts.length > 1 ? `${parts[0]}.***.${parts[parts.length - 1]}` : String(name || "");
+  };
   try {
     const bucket = await resolveBucketName();
-    report.bucket = String(bucket).replace(/^([^.]+)\..+$/, "$1.***");
+    report.bucket = maskBucket(bucket);
     const form = await createUploadForm({
       storagePath,
       contentType: "text/plain",
       sizeBytes: 1,
       successActionRedirect: `${origin}/upload-complete.html?path=${encodeURIComponent(storagePath)}`
     });
-    report.formHost = new URL(form.url).host;
+    const formUrl = new URL(form.url);
+    report.formHost = formUrl.host;
+    report.formPath = formUrl.pathname.replace(/\/$/, "").split("/").map(maskBucket).join("/");
     report.fieldCount = Object.keys(form.fields || {}).length;
     report.redirectOrigin = new URL(form.fields.success_action_redirect).origin;
+    try {
+      const { getStorage } = require("firebase-admin/storage");
+      const [buckets] = await getStorage().getBuckets({ projectId: config.firebase.projectId });
+      report.projectBuckets = buckets.map(item => maskBucket(item.name));
+    } catch (error) {
+      report.bucketListError = error.message;
+    }
 
     const body = new FormData();
     for (const [name, value] of Object.entries(form.fields || {})) {
