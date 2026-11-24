@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 const compression = require("compression");
 const express = require("express");
 const helmet = require("helmet");
@@ -19,8 +18,6 @@ const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const config = require("./config");
-const { asyncHandler } = require("./utils");
-const { createUploadForm, resolveBucketName, fileExists, deleteFile } = require("./storage");
 const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
 const app = express();
@@ -58,7 +55,9 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-app.use(express.json({ limit: "100kb" }));
+// Chunked material uploads send base64 data in JSON; each chunk stays under
+// 1 MB so it fits both this parser and Firestore's per-document limit.
+app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
 
 app.use("/api", rateLimit({
@@ -103,112 +102,6 @@ app.use((req, res, next) => {
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
-
-// Temporary deployment diagnostic: exercises the exact signed POST flow with
-// a tiny object and reports only sanitized results, never the policy or keys.
-app.get("/api/health/storage", asyncHandler(async (req, res) => {
-  const origin = `${req.protocol}://${req.get("host")}`;
-  const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
-  const maskBucket = name => {
-    const parts = String(name || "").split(".");
-    return parts.length > 1 ? `${parts[0]}.***.${parts[parts.length - 1]}` : String(name || "");
-  };
-  const report = {
-    ok: false,
-    projectId: config.firebase.projectId,
-    configuredBucket: maskBucket(config.firebase.storageBucket),
-    bucket: null,
-    formHost: null,
-    formPath: null,
-    fieldCount: 0,
-    redirectOrigin: null
-  };
-  try {
-    const bucket = await resolveBucketName();
-    report.bucket = maskBucket(bucket);
-    const form = await createUploadForm({
-      storagePath,
-      contentType: "text/plain",
-      sizeBytes: 1,
-      successActionRedirect: `${origin}/upload-complete.html?path=${encodeURIComponent(storagePath)}`
-    });
-    const formUrl = new URL(form.url);
-    report.formHost = formUrl.host;
-    report.formPath = formUrl.pathname.replace(/\/$/, "").split("/").map(maskBucket).join("/");
-    report.fieldCount = Object.keys(form.fields || {}).length;
-    report.redirectOrigin = new URL(form.fields.success_action_redirect).origin;
-    try {
-      const { getStorage } = require("firebase-admin/storage");
-      const storage = getStorage();
-      const client = storage.storageClient || storage;
-      const [buckets] = await client.getBuckets({ projectId: config.firebase.projectId });
-      report.projectBuckets = buckets.map(item => maskBucket(item.name));
-    } catch (error) {
-      report.bucketListError = error.message;
-    }
-    try {
-      const { getApp } = require("./fdb");
-      const token = await getApp().options.credential.getAccessToken();
-      const api = await fetch(
-        `https://storage.googleapis.com/storage/v1/b?project=${encodeURIComponent(config.firebase.projectId)}&maxResults=100`,
-        { headers: { Authorization: `Bearer ${token.access_token}` } }
-      );
-      const apiText = await api.text();
-      report.bucketApiStatus = api.status;
-      report.bucketApiBody = apiText.replace(/\s+/g, " ").trim().slice(0, 500);
-    } catch (error) {
-      report.bucketApiError = error.message;
-    }
-
-    const body = new FormData();
-    for (const [name, value] of Object.entries(form.fields || {})) {
-      body.append(name, String(value));
-    }
-    body.append("file", new Blob(["x"], { type: "text/plain" }), "health.txt");
-
-    const stored = await fetch(form.url, { method: "POST", body, redirect: "manual" });
-    const text = await stored.text();
-    report.status = stored.status;
-    report.location = stored.headers.get("location");
-    report.body = text.replace(/\s+/g, " ").trim().slice(0, 300);
-    report.exists = await fileExists(storagePath);
-    await deleteFile(storagePath);
-    report.deleted = true;
-    report.ok = stored.status >= 200 && stored.status < 400;
-    return res.status(report.ok ? 200 : 502).json(report);
-  } catch (error) {
-    report.error = error.message;
-    report.code = error.code || null;
-    try {
-      await deleteFile(storagePath);
-    } catch {
-      // The object may never have been created.
-    }
-    return res.status(500).json(report);
-  }
-}));
-
-// Temporary one-time setup for this deployment: creates the default Firebase
-// Storage bucket when the project has none. Remove after verification.
-app.get("/api/health/storage-setup", asyncHandler(async (req, res) => {
-  const bucketName = `${config.firebase.projectId}.firebasestorage.app`;
-  const masked = String(bucketName).split(".").map((part, index, parts) =>
-    index === 0 || index === parts.length - 1 ? part : "***"
-  ).join(".");
-  try {
-    const { getStorage } = require("firebase-admin/storage");
-    const storage = getStorage();
-    const client = storage.storageClient || storage;
-    await client.createBucket(bucketName, { location: "US", storageClass: "STANDARD" });
-    return res.json({ ok: true, created: true, bucket: masked });
-  } catch (error) {
-    const message = String(error && error.message || "");
-    if (error && (error.code === 409 || /already exists/i.test(message))) {
-      return res.json({ ok: true, created: false, bucket: masked });
-    }
-    return res.status(500).json({ ok: false, error: message.slice(0, 300) });
-  }
-}));
 
 app.use("/api/auth", authRouter);
 

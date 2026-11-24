@@ -937,13 +937,51 @@ function uploadMaterialFile(upload, file) {
       }, 250);
     };
     const timer = setTimeout(() => {
-      finish(false, "The upload timed out. Check your connection and try again.");
-    }, 120000);
+      finish(false, "Storage did not confirm the upload. Check your connection and try again.");
+    }, 45000);
 
     window.addEventListener("message", onMessage);
     iframe.addEventListener("load", onLoad);
     form.submit();
   });
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Fallback for Firebase projects without a Storage bucket. Chunks go through
+ * the authenticated API into Firestore, so the same role and class checks as
+ * normal uploads still apply.
+ */
+async function uploadMaterialChunks(upload, file) {
+  const chunkSize = Math.min(Number(upload.chunkSize) || 600 * 1024, 600 * 1024);
+  const total = Math.max(1, Math.ceil(file.size / chunkSize));
+  for (let index = 0; index < total; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(start + chunkSize, file.size);
+    const buffer = await file.slice(start, end).arrayBuffer();
+    await api("/materials/upload-chunks", {
+      method: "POST",
+      body: {
+        storagePath: upload.storagePath,
+        index,
+        total,
+        data: arrayBufferToBase64(buffer),
+        fileName: file.name,
+        contentType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        subjectId: upload.subjectId || null,
+        classIds: upload.classIds
+      }
+    });
+  }
 }
 
 function handleSessionExpired(error) {
@@ -5280,7 +5318,11 @@ async function handleSubmit(form) {
             classIds
           }
         });
-        await uploadMaterialFile(upload, file);
+        if (upload.mode === "firestore") {
+          await uploadMaterialChunks(upload, file);
+        } else {
+          await uploadMaterialFile(upload, file);
+        }
         payload.storagePath = upload.storagePath;
         payload.fileName = file.name;
         payload.sizeBytes = file.size;

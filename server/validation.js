@@ -218,6 +218,21 @@ const materialUploadUrlSchema = z.object({
   classIds: materialClassIdsSchema
 });
 
+const materialChunkSchema = z.object({
+  storagePath: z.string().trim().min(1).max(400),
+  index: z.coerce.number().int().nonnegative(),
+  total: z.coerce.number().int().positive().max(200),
+  data: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/, "Invalid file chunk."),
+  fileName: z.string().trim().min(1).max(180),
+  contentType: z.string().trim().min(1).max(120),
+  sizeBytes: z.coerce.number().int().positive().max(
+    Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024,
+    "That file is too large."
+  ),
+  subjectId: idSchema.nullable().optional(),
+  classIds: materialClassIdsSchema
+}).refine(value => value.index < value.total, "Invalid chunk position.");
+
 const materialCreateSchema = z.object({
   title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long."),
   description: z.string().trim().max(1000, "Description is too long.").optional().default(""),
@@ -323,6 +338,7 @@ module.exports = {
   httpUrlSchema,
   materialTypeSchema,
   materialUploadUrlSchema,
+  materialChunkSchema,
   materialCreateSchema,
   materialUpdateSchema,
   materialListSchema,

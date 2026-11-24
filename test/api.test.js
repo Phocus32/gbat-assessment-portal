@@ -2119,6 +2119,49 @@ test("secured portal end-to-end API flow", async t => {
         sizeBytes: 1024,
         classIds: [classId]
       });
-    assert.equal(uploadUrl.status, 503);
+    assert.equal(uploadUrl.status, 200);
+    assert.equal(uploadUrl.body.mode, "firestore");
+
+    const fileBytes = Buffer.from("%PDF-1.4 fallback upload\n");
+    const chunk = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({
+        storagePath: uploadUrl.body.storagePath,
+        index: 0,
+        total: 1,
+        data: fileBytes.toString("base64"),
+        fileName: "notes.pdf",
+        contentType: "application/pdf",
+        sizeBytes: fileBytes.length,
+        classIds: [classId]
+      });
+    assert.equal(chunk.status, 200);
+    assert.equal(chunk.body.complete, true);
+
+    const fileMaterial = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Fallback notes",
+        kind: "file",
+        fileType: "pdf",
+        storagePath: uploadUrl.body.storagePath,
+        fileName: "notes.pdf",
+        sizeBytes: fileBytes.length,
+        classIds: [classId]
+      });
+    assert.equal(fileMaterial.status, 201);
+    const fileMaterialId = fileMaterial.body.material.id;
+
+    const fileList = await studentAgent.get("/api/materials");
+    assert.equal(fileList.status, 200);
+    const storedFile = fileList.body.materials.find(item => item.id === fileMaterialId);
+    assert.ok(storedFile);
+    assert.equal(storedFile.url, `/api/materials/${fileMaterialId}/file`);
+
+    const downloaded = await studentAgent.get(storedFile.url);
+    assert.equal(downloaded.status, 200);
+    assert.equal(Buffer.compare(downloaded.body, fileBytes), 0);
   });
 });

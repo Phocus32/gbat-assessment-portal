@@ -68,6 +68,11 @@ const config = {
     1024 * 1024,
     Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024
   ),
+  // Fallback used only when the Firebase project has no Cloud Storage bucket.
+  // Files are chunked into Firestore documents, each safely below the 1 MiB
+  // per-document limit.
+  materialFirestoreMaxBytes: 10 * 1024 * 1024,
+  materialChunkBase64Bytes: 600 * 1024,
   // Signed Storage URLs are browser-facing, so the bucket must allow the app
   // origin. "*" is safe here because the short-lived signature is the actual
   // access control; set MATERIAL_CORS_ORIGINS to lock it down if needed.

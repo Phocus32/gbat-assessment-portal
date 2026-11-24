@@ -78,13 +78,18 @@ async function getBucket() {
   if (!storageAvailable()) {
     throw problem(503, "File storage is not configured. Set FIREBASE_STORAGE_BUCKET to enable uploads.");
   }
+  const name = await resolveBucketName();
+  if (!name) {
+    throw problem(503, "No Cloud Storage bucket exists for this Firebase project.");
+  }
   // Initialise the shared Firebase app before asking for Storage.
   getApp();
   const { getStorage } = require("firebase-admin/storage");
-  return getStorage().bucket(await resolveBucketName());
+  return getStorage().bucket(name);
 }
 
 let resolvedBucketName = null;
+let bucketMissingUntil = 0;
 
 /**
  * New Firebase projects use a .firebasestorage.app bucket rather than the
@@ -137,8 +142,23 @@ async function resolveBucketName() {
     // Listing requires an extra IAM permission; keep the old fallback below.
   }
 
-  // Do not cache a guessed name: a bucket can be created after a cold start.
-  return config.firebase.storageBucket || candidates[0];
+  // Never guess: a signed URL for a non-existent bucket only produces a slow,
+  // confusing failure in the browser.
+  return null;
+}
+
+/** True when a real Cloud Storage bucket is available for direct uploads. */
+async function hasUsableBucket() {
+  if (process.env.FIRESTORE_EMULATOR_HOST) return false;
+  if (resolvedBucketName) return true;
+  if (Date.now() < bucketMissingUntil) return false;
+  try {
+    if (await resolveBucketName()) return true;
+  } catch {
+    // Fall through to the short negative cache.
+  }
+  bucketMissingUntil = Date.now() + 5 * 60 * 1000;
+  return false;
 }
 
 /**
@@ -280,6 +300,7 @@ module.exports = {
   FILE_TYPES,
   TYPE_LABELS,
   storageAvailable,
+  hasUsableBucket,
   bucketName,
   candidateBucketNames,
   resolveBucketName,

@@ -17,7 +17,8 @@ const {
   updateDocById
 } = require("./fdb");
 const { listSubjects, subjectIdsOf } = require("./subjects");
-const { TYPE_LABELS, storageAvailable, createReadUrl } = require("./storage");
+const { TYPE_LABELS, hasUsableBucket, createReadUrl } = require("./storage");
+const { blobExists } = require("./material-blobs");
 
 function httpError(status, message) {
   const error = new Error(message);
@@ -88,15 +89,20 @@ function visibleToUser(row, user, allowed) {
   return classIdsOf(row).some(classId => allowed.has(classId));
 }
 
-async function serialiseMaterial(row, classMap, subjectMap, userMap) {
+async function serialiseMaterial(row, classMap, subjectMap, userMap, storageReady) {
   let url = null;
   if (row.kind === "link") {
     url = row.link_url || null;
-  } else if (storageAvailable()) {
-    try {
-      url = await createReadUrl(row.storage_path);
-    } catch {
-      url = null;
+  } else {
+    if (storageReady) {
+      try {
+        url = await createReadUrl(row.storage_path);
+      } catch {
+        url = null;
+      }
+    }
+    if (!url && row.storage_path && await blobExists(row.storage_path)) {
+      url = `/api/materials/${row.id}/file`;
     }
   }
 
@@ -166,9 +172,12 @@ async function listMaterials(user, filters = {}) {
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
   const subjectMap = new Map(subjects.map(subject => [Number(subject.id), subject.name]));
   const userMap = new Map(users.map(item => [Number(item.id), item]));
+  const storageReady = visible.some(row => row.kind === "file")
+    ? await hasUsableBucket()
+    : false;
   const materials = [];
   for (const row of visible) {
-    materials.push(await serialiseMaterial(row, classMap, subjectMap, userMap));
+    materials.push(await serialiseMaterial(row, classMap, subjectMap, userMap, storageReady));
   }
 
   return {
@@ -256,6 +265,7 @@ module.exports = {
   allowedClassIds,
   manageableClasses,
   assertManageableScope,
+  visibleToUser,
   listMaterials,
   createMaterial,
   updateMaterial,

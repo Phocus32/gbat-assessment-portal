@@ -2,12 +2,20 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { candidateBucketNames, storageCorsConfiguration } = require("../server/storage");
+const {
+  candidateBucketNames,
+  storageCorsConfiguration,
+  hasUsableBucket
+} = require("../server/storage");
 
 test("bucket discovery covers both Firebase Storage naming formats", () => {
   const names = candidateBucketNames();
   assert.ok(names.length >= 1);
   assert.ok(names.every(name => typeof name === "string" && name.length > 0));
+});
+
+test("Storage is treated as unavailable while the Firestore emulator runs", async () => {
+  assert.equal(await hasUsableBucket(), false);
 });
 
 test("storage CORS policy permits signed browser uploads", () => {
