@@ -12,6 +12,7 @@
     "import-html": "node scripts/import-html-questions.js",
     "import-students": "node scripts/import-students.js",
     "seed-portal": "node scripts/seed-portal.js",
+    "storage:cors": "node scripts/configure-storage-cors.js",
     "test": "firebase emulators:exec --only firestore --project gbat-test \"node --test test/*.test.js\"",
     "test:direct": "node --test test/*.test.js",
     "emulators": "firebase emulators:start --only firestore --project gbat-test"

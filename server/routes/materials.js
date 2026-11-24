@@ -12,6 +12,7 @@ const {
 } = require("../validation");
 const {
   createUploadUrl,
+  resolveBucketName,
   resolveFileType,
   storagePathFor
 } = require("../storage");
@@ -43,7 +44,7 @@ router.post("/upload-url", manage, asyncHandler(async (req, res) => {
     contentType: input.contentType,
     sizeBytes: input.sizeBytes
   });
-  return res.json({ uploadUrl, storagePath, fileType });
+  return res.json({ uploadUrl, storagePath, fileType, bucket: await resolveBucketName() });
 }));
 
 router.post("/", manage, asyncHandler(async (req, res) => {

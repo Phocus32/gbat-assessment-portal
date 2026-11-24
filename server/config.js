@@ -68,6 +68,13 @@ const config = {
     1024 * 1024,
     Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024
   ),
+  // Signed Storage URLs are browser-facing, so the bucket must allow the app
+  // origin. "*" is safe here because the short-lived signature is the actual
+  // access control; set MATERIAL_CORS_ORIGINS to lock it down if needed.
+  materialCorsOrigins: String(process.env.MATERIAL_CORS_ORIGINS || "*")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean),
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "4h",
   // Inactivity timeout. The browser counts real user activity; the server also

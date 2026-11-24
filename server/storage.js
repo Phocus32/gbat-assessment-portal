@@ -11,7 +11,7 @@
 const crypto = require("crypto");
 const path = require("path");
 const config = require("./config");
-const { getDb } = require("./fdb");
+const { getApp } = require("./fdb");
 
 const FILE_TYPES = [
   {
@@ -58,7 +58,14 @@ function problem(status, message) {
 }
 
 function bucketName() {
-  return config.storageBucket || `${config.firebase.projectId}.appspot.com`;
+  return config.firebase.storageBucket || `${config.firebase.projectId}.appspot.com`;
+}
+
+function candidateBucketNames() {
+  if (config.firebase.storageBucket) return [config.firebase.storageBucket];
+  const project = config.firebase.projectId;
+  // Older Firebase projects use appspot.com; newer ones use firebasestorage.app.
+  return [`${project}.appspot.com`, `${project}.firebasestorage.app`];
 }
 
 function storageAvailable() {
@@ -72,9 +79,80 @@ async function getBucket() {
     throw problem(503, "File storage is not configured. Set FIREBASE_STORAGE_BUCKET to enable uploads.");
   }
   // Initialise the shared Firebase app before asking for Storage.
-  getDb();
+  getApp();
   const { getStorage } = require("firebase-admin/storage");
-  return getStorage().bucket(bucketName());
+  return getStorage().bucket(await resolveBucketName());
+}
+
+let resolvedBucketName = null;
+
+/**
+ * New Firebase projects use a .firebasestorage.app bucket rather than the
+ * legacy .appspot.com name. Probe once per process so deployments that never
+ * set FIREBASE_STORAGE_BUCKET still target the real bucket.
+ */
+async function resolveBucketName() {
+  if (config.firebase.storageBucket) return config.firebase.storageBucket;
+  if (resolvedBucketName) return resolvedBucketName;
+
+  getApp();
+  const { getStorage } = require("firebase-admin/storage");
+  const candidates = candidateBucketNames();
+  for (const name of candidates) {
+    try {
+      await getStorage().bucket(name).getMetadata();
+      resolvedBucketName = name;
+      return name;
+    } catch (error) {
+      // 404 means the bucket does not exist. Any other error (for example a
+      // service account without bucket.get) means probing is unreliable, so
+      // fall back to the legacy name instead of failing every upload.
+      if (!error || error.code !== 404) break;
+    }
+  }
+  resolvedBucketName = candidates[0];
+  return resolvedBucketName;
+}
+
+/**
+ * Browser uploads go straight to storage.googleapis.com, which is a different
+ * origin from the app. Without bucket CORS the preflight fails before the
+ * signed PUT is sent, and the browser only reports a generic TypeError.
+ */
+function storageCorsConfiguration() {
+  return [
+    {
+      maxAgeSeconds: 3600,
+      method: ["GET", "PUT", "HEAD"],
+      origin: config.materialCorsOrigins.length ? config.materialCorsOrigins : ["*"],
+      responseHeader: ["Content-Type"]
+    }
+  ];
+}
+
+async function configureStorageCors() {
+  getApp();
+  const { getStorage } = require("firebase-admin/storage");
+  const storage = getStorage();
+  const candidates = candidateBucketNames();
+  let lastError = null;
+
+  for (const name of candidates) {
+    const bucket = storage.bucket(name);
+    try {
+      await bucket.getMetadata();
+      await bucket.setCorsConfiguration(storageCorsConfiguration());
+      return { bucket: bucket.name, cors: storageCorsConfiguration() };
+    } catch (error) {
+      lastError = error;
+      if (!error || error.code !== 404) throw error;
+    }
+  }
+
+  throw problem(
+    404,
+    `No Storage bucket found. Checked: ${candidates.join(", ")}. Set FIREBASE_STORAGE_BUCKET to the correct bucket. ${lastError ? `Last error: ${lastError.message}` : ""}`.trim()
+  );
 }
 
 function safeFileName(fileName) {
@@ -153,6 +231,10 @@ module.exports = {
   TYPE_LABELS,
   storageAvailable,
   bucketName,
+  candidateBucketNames,
+  resolveBucketName,
+  storageCorsConfiguration,
+  configureStorageCors,
   resolveFileType,
   storagePathFor,
   createUploadUrl,

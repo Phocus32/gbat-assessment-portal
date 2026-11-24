@@ -37,6 +37,7 @@ Keep the downloaded file safe. You will copy three values from it into Vercel.
 | `FIREBASE_PRIVATE_KEY` | `private_key` from the JSON, including `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` |
 | `JWT_SECRET` | A random string of at least 32 characters (see below) |
 | `SEED_DEMO` | `false` recommended for a real deployment |
+| `FIREBASE_STORAGE_BUCKET` | Optional; the app detects either `<project-id>.appspot.com` or `<project-id>.firebasestorage.app` |
 
 Generate `JWT_SECRET` locally:
 
@@ -61,6 +62,31 @@ Optional first-boot variables:
 > Firebase private keys often contain real line breaks. Vercel supports
 > multi-line values; paste them as-is. The app also accepts literal `\n`
 > characters. Never commit this JSON or put it in `public/`.
+
+### Learning materials storage (one-time)
+
+File uploads go straight from the browser to Firebase Storage through a
+short-lived signed URL. The bucket must allow browser preflight requests from
+the app origin. After the Firebase variables above are set **on your machine**,
+run:
+
+```bash
+npm run storage:cors
+```
+
+That writes a CORS rule for `GET`, `PUT`, and `HEAD` with the `Content-Type`
+header. It checks both bucket naming formats and prints the one it configured;
+copy that value into `FIREBASE_STORAGE_BUCKET` in Vercel if you want to skip
+detection on future cold starts. By default the rule allows any origin, which
+is safe because the signed URL is the actual access control. Set
+`MATERIAL_CORS_ORIGINS` to a comma-separated list such as
+`https://learnersconnect.vercel.app,http://localhost:3000` if you want to
+restrict it. Re-run the command whenever that list or the deployment domain
+changes.
+
+The account in the Firebase credentials needs permission to update bucket
+metadata (the **Storage Admin** role works). If you prefer the Google Cloud
+CLI, apply the equivalent CORS JSON with `gcloud storage buckets update`.
 
 4. Click **Deploy**. The first request runs the one-time bootstrap.
 
@@ -188,3 +214,6 @@ Protect or delete any generated credentials file.
 | No credentials in the log | They are printed only on the first boot; reset the password from the admin dashboard or run `npm run create-admin` |
 | Data disappeared | Confirm you are using the same Firebase project, not the emulator project `gbat-test` |
 | Tests fail to start | Install Java 21+ and allow the Firebase CLI to download the Firestore emulator jar once |
+| `Upload was blocked before it reached storage` | Run `npm run storage:cors` against the real Firebase project, then retry |
+| `Storage rejected the file (403/404 …)` | Check `FIREBASE_STORAGE_BUCKET` and that the bucket exists; signed URLs do not create buckets |
+| `File storage is not configured` | Set `FIREBASE_STORAGE_BUCKET` in Vercel, or rely on the `<project-id>.appspot.com` default; this message is expected under the local emulator |

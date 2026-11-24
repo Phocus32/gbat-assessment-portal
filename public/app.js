@@ -5190,12 +5190,29 @@ async function handleSubmit(form) {
             classIds
           }
         });
-        const stored = await fetch(upload.uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": contentType },
-          body: file
-        });
-        if (!stored.ok) throw new Error("The file could not be uploaded. Please try again.");
+        let stored;
+        try {
+          stored = await fetch(upload.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": contentType },
+            body: file
+          });
+        } catch {
+          throw new Error(
+            "Upload was blocked before it reached storage. Ask an administrator to run npm run storage:cors, then try again."
+          );
+        }
+        if (!stored.ok) {
+          let detail = "";
+          try {
+            detail = (await stored.text()).trim().replace(/\s+/g, " ").slice(0, 180);
+          } catch {
+            // Keep the status code below even when the error body is unreadable.
+          }
+          throw new Error(
+            `Storage rejected the file (${stored.status}${detail ? `: ${detail}` : ""} on ${upload.bucket || "the configured bucket"}). Please try again.`
+          );
+        }
         payload.storagePath = upload.storagePath;
         payload.fileName = file.name;
         payload.sizeBytes = file.size;

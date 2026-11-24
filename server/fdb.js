@@ -49,10 +49,14 @@ function buildApp() {
   return initializeApp({ credential: applicationDefault(), projectId });
 }
 
+function getApp() {
+  if (!adminApp) adminApp = buildApp();
+  return adminApp;
+}
+
 function getDb() {
   if (firestore) return firestore;
-  adminApp = buildApp();
-  firestore = getFirestore(adminApp);
+  firestore = getFirestore(getApp());
   firestore.settings({ ignoreUndefinedProperties: true });
   return firestore;
 }
@@ -503,6 +507,7 @@ async function close() {
 }
 
 module.exports = {
+  getApp,
   getDb,
   col,
   docData,
