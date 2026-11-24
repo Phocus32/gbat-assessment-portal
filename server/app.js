@@ -109,10 +109,19 @@ app.get("/api/health", (req, res) => {
 app.get("/api/health/storage", asyncHandler(async (req, res) => {
   const origin = `${req.protocol}://${req.get("host")}`;
   const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
-  const report = { ok: false, bucket: null, formHost: null, formPath: null, fieldCount: 0, redirectOrigin: null };
   const maskBucket = name => {
     const parts = String(name || "").split(".");
     return parts.length > 1 ? `${parts[0]}.***.${parts[parts.length - 1]}` : String(name || "");
+  };
+  const report = {
+    ok: false,
+    projectId: config.firebase.projectId,
+    configuredBucket: maskBucket(config.firebase.storageBucket),
+    bucket: null,
+    formHost: null,
+    formPath: null,
+    fieldCount: 0,
+    redirectOrigin: null
   };
   try {
     const bucket = await resolveBucketName();
@@ -136,6 +145,19 @@ app.get("/api/health/storage", asyncHandler(async (req, res) => {
       report.projectBuckets = buckets.map(item => maskBucket(item.name));
     } catch (error) {
       report.bucketListError = error.message;
+    }
+    try {
+      const { getApp } = require("./fdb");
+      const token = await getApp().options.credential.getAccessToken();
+      const api = await fetch(
+        `https://storage.googleapis.com/storage/v1/b?project=${encodeURIComponent(config.firebase.projectId)}&maxResults=100`,
+        { headers: { Authorization: `Bearer ${token.access_token}` } }
+      );
+      const apiText = await api.text();
+      report.bucketApiStatus = api.status;
+      report.bucketApiBody = apiText.replace(/\s+/g, " ").trim().slice(0, 500);
+    } catch (error) {
+      report.bucketApiError = error.message;
     }
 
     const body = new FormData();
