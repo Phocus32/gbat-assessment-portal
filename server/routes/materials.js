@@ -11,7 +11,7 @@ const {
   materialListSchema
 } = require("../validation");
 const {
-  createUploadUrl,
+  createUploadForm,
   resolveBucketName,
   resolveFileType,
   storagePathFor
@@ -39,12 +39,20 @@ router.post("/upload-url", manage, asyncHandler(async (req, res) => {
   await assertManageableScope(req.user, input.classIds, input.subjectId);
   const fileType = resolveFileType(input.fileName, input.contentType);
   const storagePath = storagePathFor(input.fileName);
-  const uploadUrl = await createUploadUrl({
+  const origin = `${req.protocol}://${req.get("host")}`;
+  const form = await createUploadForm({
     storagePath,
     contentType: input.contentType,
-    sizeBytes: input.sizeBytes
+    sizeBytes: input.sizeBytes,
+    successActionRedirect: `${origin}/upload-complete.html?path=${encodeURIComponent(storagePath)}`
   });
-  return res.json({ uploadUrl, storagePath, fileType, bucket: await resolveBucketName() });
+  return res.json({
+    uploadUrl: form.url,
+    uploadFields: form.fields,
+    storagePath,
+    fileType,
+    bucket: await resolveBucketName()
+  });
 }));
 
 router.post("/", manage, asyncHandler(async (req, res) => {

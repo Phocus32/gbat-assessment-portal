@@ -45,8 +45,10 @@ app.use(helmet({
       "connect-src": ["'self'"],
       "object-src": ["'none'"],
       "base-uri": ["'self'"],
-      "form-action": ["'self'"],
-      "frame-ancestors": ["'none'"],
+      // Material uploads post directly to Storage in a hidden iframe.
+      "form-action": ["'self'", "https://storage.googleapis.com"],
+      "frame-src": ["'self'", "https://storage.googleapis.com"],
+      "frame-ancestors": ["'self'"],
      "upgrade-insecure-requests": config.env === "production" ? [] : null
     }
   },

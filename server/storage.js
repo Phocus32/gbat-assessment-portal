@@ -199,6 +199,29 @@ async function createUploadUrl({ storagePath, contentType, sizeBytes }) {
   return url;
 }
 
+/**
+ * HTML form uploads are a simple cross-origin POST, so the browser does not
+ * send a CORS preflight. The signed policy still limits the object path, size
+ * and content type, and redirects back to the app only after Storage accepts
+ * the bytes.
+ */
+async function createUploadForm({ storagePath, contentType, sizeBytes, successActionRedirect }) {
+  const bucket = await getBucket();
+  if (!Number.isInteger(sizeBytes) || sizeBytes > config.materialMaxUploadBytes) {
+    throw problem(413, "That file is too large.");
+  }
+  const file = bucket.file(storagePath);
+  const [policy] = await file.generateSignedPostPolicyV4({
+    expires: Date.now() + 15 * 60 * 1000,
+    conditions: [["content-length-range", 1, sizeBytes]],
+    fields: {
+      "Content-Type": contentType,
+      success_action_redirect: successActionRedirect
+    }
+  });
+  return policy;
+}
+
 async function createReadUrl(storagePath) {
   const bucket = await getBucket();
   const file = bucket.file(storagePath);
@@ -238,6 +261,7 @@ module.exports = {
   resolveFileType,
   storagePathFor,
   createUploadUrl,
+  createUploadForm,
   createReadUrl,
   fileExists,
   deleteFile

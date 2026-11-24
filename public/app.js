@@ -856,6 +856,96 @@ async function api(path, options = {}) {
   return payload;
 }
 
+/**
+ * Upload straight to Firebase Storage with a signed POST policy. A normal form
+ * submission is not subject to CORS, and the hidden iframe keeps the user on
+ * the current page. Storage redirects that iframe back to
+ * /upload-complete.html, which posts the success message to this window.
+ */
+function uploadMaterialFile(upload, file) {
+  return new Promise((resolve, reject) => {
+    const suffix = window.crypto && window.crypto.randomUUID
+      ? window.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const frameName = `material-upload-${suffix}`;
+
+    const iframe = document.createElement("iframe");
+    iframe.name = frameName;
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.display = "none";
+
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.enctype = "multipart/form-data";
+    form.action = upload.uploadUrl;
+    form.target = frameName;
+
+    for (const [name, value] of Object.entries(upload.uploadFields || {})) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = String(value);
+      form.appendChild(input);
+    }
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.name = "file";
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    form.appendChild(fileInput);
+
+    document.body.append(iframe, form);
+
+    let settled = false;
+    let firstLoad = true;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      iframe.removeEventListener("load", onLoad);
+      form.remove();
+      setTimeout(() => iframe.remove(), 0);
+    };
+    const finish = (ok, message) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (ok) resolve();
+      else reject(new Error(message));
+    };
+    const onMessage = event => {
+      if (event.source !== iframe.contentWindow) return;
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || data.type !== "material-upload-complete") return;
+      if (data.path !== upload.storagePath) return;
+      finish(true);
+    };
+    const onLoad = () => {
+      // The first load can be the initial empty frame. A later load without a
+      // success message means Storage returned an error page.
+      if (firstLoad) {
+        firstLoad = false;
+        return;
+      }
+      setTimeout(() => {
+        if (!settled) {
+          finish(false, `Storage rejected the file on ${upload.bucket || "the configured bucket"}. Please try again.`);
+        }
+      }, 250);
+    };
+    const timer = setTimeout(() => {
+      finish(false, "The upload timed out. Check your connection and try again.");
+    }, 120000);
+
+    window.addEventListener("message", onMessage);
+    iframe.addEventListener("load", onLoad);
+    form.submit();
+  });
+}
+
 function handleSessionExpired(error) {
   if (state.screen === "login") return;
   const message = error && error.code === "SESSION_EXPIRED"
@@ -5190,29 +5280,7 @@ async function handleSubmit(form) {
             classIds
           }
         });
-        let stored;
-        try {
-          stored = await fetch(upload.uploadUrl, {
-            method: "PUT",
-            headers: { "Content-Type": contentType },
-            body: file
-          });
-        } catch {
-          throw new Error(
-            "Upload was blocked before it reached storage. Ask an administrator to run npm run storage:cors, then try again."
-          );
-        }
-        if (!stored.ok) {
-          let detail = "";
-          try {
-            detail = (await stored.text()).trim().replace(/\s+/g, " ").slice(0, 180);
-          } catch {
-            // Keep the status code below even when the error body is unreadable.
-          }
-          throw new Error(
-            `Storage rejected the file (${stored.status}${detail ? `: ${detail}` : ""} on ${upload.bucket || "the configured bucket"}). Please try again.`
-          );
-        }
+        await uploadMaterialFile(upload, file);
         payload.storagePath = upload.storagePath;
         payload.fileName = file.name;
         payload.sizeBytes = file.size;

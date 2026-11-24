@@ -66,9 +66,10 @@ Optional first-boot variables:
 ### Learning materials storage (one-time)
 
 File uploads go straight from the browser to Firebase Storage through a
-short-lived signed URL. The bucket must allow browser preflight requests from
-the app origin. After the Firebase variables above are set **on your machine**,
-run:
+short-lived signed form policy, so they do not need bucket CORS. The
+`storage:cors` command below is kept for deployments that still use the older
+signed-PUT flow or other browser clients. After the Firebase variables above
+are set **on your machine**, run:
 
 ```bash
 npm run storage:cors
@@ -214,6 +215,6 @@ Protect or delete any generated credentials file.
 | No credentials in the log | They are printed only on the first boot; reset the password from the admin dashboard or run `npm run create-admin` |
 | Data disappeared | Confirm you are using the same Firebase project, not the emulator project `gbat-test` |
 | Tests fail to start | Install Java 21+ and allow the Firebase CLI to download the Firestore emulator jar once |
-| `Upload was blocked before it reached storage` | Run `npm run storage:cors` against the real Firebase project, then retry |
+| `Failed to fetch` during upload | Hard-refresh to load `app.js?v=24`; uploads now use a signed POST form instead of a CORS-restricted PUT |
 | `Storage rejected the file (403/404 …)` | Check `FIREBASE_STORAGE_BUCKET` and that the bucket exists; signed URLs do not create buckets |
 | `File storage is not configured` | Set `FIREBASE_STORAGE_BUCKET` in Vercel, or rely on the `<project-id>.appspot.com` default; this message is expected under the local emulator |
