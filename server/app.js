@@ -20,7 +20,7 @@ const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const config = require("./config");
 const { asyncHandler } = require("./utils");
-const { createUploadForm, resolveBucketName } = require("./storage");
+const { createUploadForm, resolveBucketName, fileExists, deleteFile } = require("./storage");
 const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
 const app = express();
@@ -104,32 +104,50 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
 
-// Temporary deployment diagnostic: confirms the signed POST policy can be
-// minted without exposing the policy or credentials.
+// Temporary deployment diagnostic: exercises the exact signed POST flow with
+// a tiny object and reports only sanitized results, never the policy or keys.
 app.get("/api/health/storage", asyncHandler(async (req, res) => {
+  const origin = `${req.protocol}://${req.get("host")}`;
+  const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
+  const report = { ok: false, bucket: null, formHost: null, fieldCount: 0, redirectOrigin: null };
   try {
-    const origin = `${req.protocol}://${req.get("host")}`;
-    const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
     const bucket = await resolveBucketName();
+    report.bucket = String(bucket).replace(/^([^.]+)\..+$/, "$1.***");
     const form = await createUploadForm({
       storagePath,
       contentType: "text/plain",
       sizeBytes: 1,
       successActionRedirect: `${origin}/upload-complete.html?path=${encodeURIComponent(storagePath)}`
     });
-    return res.json({
-      ok: true,
-      bucket: String(bucket).replace(/^([^.]+)\..+$/, "$1.***"),
-      formHost: new URL(form.url).host,
-      fieldCount: Object.keys(form.fields || {}).length,
-      redirectOrigin: new URL(form.fields.success_action_redirect).origin
-    });
+    report.formHost = new URL(form.url).host;
+    report.fieldCount = Object.keys(form.fields || {}).length;
+    report.redirectOrigin = new URL(form.fields.success_action_redirect).origin;
+
+    const body = new FormData();
+    for (const [name, value] of Object.entries(form.fields || {})) {
+      body.append(name, String(value));
+    }
+    body.append("file", new Blob(["x"], { type: "text/plain" }), "health.txt");
+
+    const stored = await fetch(form.url, { method: "POST", body, redirect: "manual" });
+    const text = await stored.text();
+    report.status = stored.status;
+    report.location = stored.headers.get("location");
+    report.body = text.replace(/\s+/g, " ").trim().slice(0, 300);
+    report.exists = await fileExists(storagePath);
+    await deleteFile(storagePath);
+    report.deleted = true;
+    report.ok = stored.status >= 200 && stored.status < 400;
+    return res.status(report.ok ? 200 : 502).json(report);
   } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message,
-      code: error.code || null
-    });
+    report.error = error.message;
+    report.code = error.code || null;
+    try {
+      await deleteFile(storagePath);
+    } catch {
+      // The object may never have been created.
+    }
+    return res.status(500).json(report);
   }
 }));
 
