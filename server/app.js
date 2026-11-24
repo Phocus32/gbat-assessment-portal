@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const compression = require("compression");
 const express = require("express");
 const helmet = require("helmet");
@@ -18,6 +19,8 @@ const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const config = require("./config");
+const { asyncHandler } = require("./utils");
+const { createUploadForm, resolveBucketName } = require("./storage");
 const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
 const app = express();
@@ -100,6 +103,35 @@ app.use((req, res, next) => {
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
+
+// Temporary deployment diagnostic: confirms the signed POST policy can be
+// minted without exposing the policy or credentials.
+app.get("/api/health/storage", asyncHandler(async (req, res) => {
+  try {
+    const origin = `${req.protocol}://${req.get("host")}`;
+    const storagePath = `materials/health/${crypto.randomUUID()}.txt`;
+    const bucket = await resolveBucketName();
+    const form = await createUploadForm({
+      storagePath,
+      contentType: "text/plain",
+      sizeBytes: 1,
+      successActionRedirect: `${origin}/upload-complete.html?path=${encodeURIComponent(storagePath)}`
+    });
+    return res.json({
+      ok: true,
+      bucket: String(bucket).replace(/^([^.]+)\..+$/, "$1.***"),
+      formHost: new URL(form.url).host,
+      fieldCount: Object.keys(form.fields || {}).length,
+      redirectOrigin: new URL(form.fields.success_action_redirect).origin
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+      code: error.code || null
+    });
+  }
+}));
 
 app.use("/api/auth", authRouter);
 
