@@ -17,6 +17,7 @@ const leaderboardRouter = require("./routes/leaderboard");
 const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
+const gameRouter = require("./routes/game");
 const config = require("./config");
 const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
@@ -115,6 +116,9 @@ app.use("/api/submissions", authenticate, requirePasswordChanged, submissionsRou
 // Role checks for complaints happen inside the router: participants and admins
 // have different permissions on the same collection.
 app.use("/api/complaints", authenticate, requirePasswordChanged, complaintsRouter);
+// Brain Sprint is practice-only and student-only. Its sessions and scores are
+// stored separately from attempts, submissions and the exam leaderboard.
+app.use("/api/game", authenticate, requirePasswordChanged, requireRole("student"), gameRouter);
 
 app.get(["/", "/index.html"], (req, res) => {
   res.type("html")

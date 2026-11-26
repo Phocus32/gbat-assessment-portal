@@ -203,6 +203,16 @@ const questionMoveSchema = questionIdsSchema.extend({
 
 const leaderboardPeriodSchema = z.enum(["week", "last-week", "all"]).default("week");
 
+const gameAnswerSchema = z.object({
+  sessionId: idSchema,
+  position: z.coerce.number().int().nonnegative(),
+  chosenIndex: z.coerce.number().int().min(0).max(3)
+});
+
+const gameFinishSchema = z.object({
+  sessionId: idSchema
+});
+
 const httpUrlSchema = z.string().trim().max(2000).refine(value => {
   try {
     return ["http:", "https:"].includes(new URL(value).protocol);
@@ -335,6 +345,8 @@ module.exports = {
   questionIdsSchema,
   questionMoveSchema,
   leaderboardPeriodSchema,
+  gameAnswerSchema,
+  gameFinishSchema,
   httpUrlSchema,
   materialTypeSchema,
   materialUploadUrlSchema,

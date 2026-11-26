@@ -50,6 +50,19 @@ npm run emulators
 - Teachers and students can submit complaints; admins see all complaints, can
   filter/search them, reply and close/reopen them.
 
+## Brain Sprint
+
+- Students can play **Brain Sprint** at any time as practice. It uses procedural
+  number, sequence and pattern puzzles, so it never reads the class question bank.
+- Each round lasts 60 seconds. A correct answer earns 100 points × the current
+  streak multiplier (starts at 1×, rises by 0.25× per correct answer, capped at
+  3×). A wrong answer resets the streak and costs 5 seconds.
+- The first completed round each UTC day adds a 100-point bonus. Finishing twice
+  cannot award the bonus twice.
+- Brain Sprint scores live in `game_sessions`, `game_scores`, `game_active` and
+  `game_daily`. They appear only on the school-wide Brain Sprint leaderboard and
+  never enter exam submissions, XP, badges or the class leaderboard.
+
 ## Host it online
 
 See **[HOSTING.md](HOSTING.md)** for the full Vercel + Firebase walkthrough.

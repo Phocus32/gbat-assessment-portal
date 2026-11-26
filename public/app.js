@@ -38,6 +38,7 @@ const NAV_ITEMS = {
   ],
   student: [
     ["dashboard", "Dashboard"],
+    ["brain", "Brain Sprint"],
     ["leaderboard", "Leaderboard"],
     ["materials", "Materials"],
     ["rewards", "Rewards"],
@@ -91,6 +92,17 @@ const state = {
   leaderboardPeriod: "week",
   materials: null,
   materialFilters: { q: "", subjectId: "all", classId: "all", type: "all" },
+  brainSession: null,
+  brainRules: null,
+  brainFeedback: null,
+  brainSummary: null,
+  brainLeaderboard: null,
+  brainPeriod: "week",
+  brainBusy: false,
+  brainFinishing: false,
+  brainTimer: null,
+  brainEndsAt: null,
+  brainTimerMilestone: "",
   questionFilters: { q: "", classId: "all", subjectId: "all" },
   progress: null,
   badgeFilter: "all",
@@ -1405,6 +1417,15 @@ async function navTo(view) {
       toast(error.message, "error");
     }
   }
+  if (view === "brain") {
+    try {
+      await Promise.all([loadBrainSession(), loadBrainLeaderboard()]);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  } else {
+    stopBrainTimer();
+  }
   render();
   focusMainContent();
   scrollToTop();
@@ -1464,6 +1485,7 @@ function renderShell() {
     observeReveals(page);
   }
   updateScrollUi();
+  syncBrainTimer();
   restoreFocus(snapshot);
 }
 
@@ -2703,6 +2725,7 @@ function renderComplaints() {
 /* Student */
 
 function renderStudentView() {
+  if (state.view === "brain") return renderBrainSprint();
   if (state.view === "leaderboard") return renderLeaderboard();
   if (state.view === "materials") return renderMaterials();
   if (state.view === "rewards") return renderStudentRewards();
@@ -3345,6 +3368,7 @@ function studentHero() {
           </div>` : ""}
         <div class="hero-actions">
           <button type="button" class="btn btn-primary" data-action="scroll-quizzes">Find a quiz</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="brain">Play Brain Sprint</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="leaderboard">Class leaderboard</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="rewards">My rewards</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
@@ -3370,6 +3394,15 @@ function renderStudentDashboard() {
       ${statCard("Average", `${d.stats.average}%`, "Best attempt per quiz", "gold")}
       ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`, "coral")}
     </div>
+    <section class="brain-promo">
+      <span class="brain-promo-icon" aria-hidden="true">⚡</span>
+      <div class="brain-promo-copy">
+        <span class="eyebrow">Brain break</span>
+        <h2>Brain Sprint is always open</h2>
+        <p>Sixty seconds of number targets, sequences and pattern grids. Practice only, with its own school leaderboard — exam results stay untouched.</p>
+      </div>
+      <button type="button" class="btn btn-primary" data-action="nav" data-view="brain">Play now</button>
+    </section>
     <div class="grid-2">
       <section class="panel">
         <div class="panel-head"><h2 class="panel-title">How attempts work</h2></div>
@@ -3444,6 +3477,364 @@ function renderStudentDashboard() {
       </div>` : emptyState("No quizzes yet", "When your teacher publishes a quiz for your class, it will appear here.")}`;
 }
 
+/* Brain Sprint */
+
+const BRAIN_PERIODS = [
+  ["week", "This week"],
+  ["last-week", "Last week"],
+  ["all", "All time"]
+];
+
+async function loadBrainSession() {
+  const result = await api("/game/session");
+  state.brainRules = result.rules;
+  state.brainSession = result.session;
+  state.brainEndsAt = result.session ? new Date(result.session.endsAt).getTime() : null;
+  state.brainFeedback = null;
+  if (!result.session) state.brainSummary = null;
+  return result;
+}
+
+async function loadBrainLeaderboard() {
+  const period = encodeURIComponent(state.brainPeriod || "week");
+  state.brainLeaderboard = await api(`/game/leaderboard?period=${period}`);
+  return state.brainLeaderboard;
+}
+
+function stopBrainTimer() {
+  if (state.brainTimer) clearInterval(state.brainTimer);
+  state.brainTimer = null;
+}
+
+function syncBrainTimer() {
+  const shouldRun = state.screen === "app"
+    && state.view === "brain"
+    && state.brainSession
+    && state.brainSession.status === "in_progress";
+  if (!shouldRun) {
+    stopBrainTimer();
+    return;
+  }
+  if (!state.brainTimer) {
+    state.brainTimer = setInterval(brainTick, 250);
+  }
+  updateBrainTimerDisplay();
+}
+
+function updateBrainTimerDisplay() {
+  const timerEl = document.getElementById("brain-timer");
+  if (!timerEl) return;
+  const seconds = state.brainEndsAt
+    ? Math.max(0, Math.ceil((state.brainEndsAt - Date.now()) / 1000))
+    : 0;
+  timerEl.textContent = formatClock(seconds);
+  timerEl.classList.toggle("urgent", seconds <= 10);
+
+  const progressEl = document.getElementById("brain-progress");
+  if (progressEl) {
+    progressEl.value = Math.min(Number(progressEl.max) || 60, seconds);
+    progressEl.setAttribute("aria-valuetext", `${formatClock(seconds)} remaining`);
+  }
+
+  const liveEl = document.getElementById("brain-timer-live");
+  if (liveEl && seconds <= 10 && state.brainTimerMilestone !== "ten") {
+    state.brainTimerMilestone = "ten";
+    liveEl.textContent = "10 seconds left.";
+  }
+}
+
+function brainTick() {
+  if (!state.brainSession || state.brainFinishing) return;
+  const seconds = state.brainEndsAt
+    ? Math.max(0, Math.ceil((state.brainEndsAt - Date.now()) / 1000))
+    : 0;
+  updateBrainTimerDisplay();
+  if (seconds <= 0) {
+    stopBrainTimer();
+    toast("Time is up — saving your round.", "warn");
+    finishBrainRound(true).catch(error => toast(error.message, "error"));
+  }
+}
+
+function brainRuleChips() {
+  const rules = state.brainRules;
+  if (!rules) return "";
+  return `
+    <div class="brain-rules">
+      <span class="pill">${esc(rules.roundSeconds)}s round</span>
+      <span class="pill">+${esc(rules.basePoints)} per correct</span>
+      <span class="pill">Streak up to ${esc(rules.maxMultiplier)}×</span>
+      <span class="pill warn">−${esc(rules.wrongPenaltySeconds)}s on a miss</span>
+      <span class="pill">+${esc(rules.dailyBonusPoints)} daily bonus</span>
+    </div>`;
+}
+
+function brainBoardRows(limit = 5) {
+  const rows = (state.brainLeaderboard && state.brainLeaderboard.leaderboard) || [];
+  const shown = rows.slice(0, limit);
+  if (!shown.length) return emptyState("No scores yet", "Complete a round to start the school board.");
+  return `
+    <ol class="brain-board-list">
+      ${shown.map(row => `
+        <li class="${Number(row.studentId) === Number(state.user.id) ? "is-you" : ""}">
+          <span class="brain-board-rank">${esc(row.rank)}</span>
+          <span class="brain-board-name">${esc(row.name)}${Number(row.studentId) === Number(state.user.id) ? '<small>You</small>' : ""}</span>
+          <strong>${esc(row.points)}</strong>
+        </li>`).join("")}
+    </ol>`;
+}
+
+function renderBrainSprint() {
+  if (state.brainSummary) {
+    const summary = state.brainSummary;
+    return `
+      ${pageHead("Practice game", "Round complete", "Brain Sprint scores are kept on their own school-wide board.")}
+      <section class="panel brain-summary">
+        <div class="brain-summary-mark" aria-hidden="true">✦</div>
+        <h2>${esc(summary.score)} points</h2>
+        <p>${summary.dailyBonus
+          ? `Including your +${esc(summary.dailyBonus)} first-round daily bonus.`
+          : `Base score ${esc(summary.baseScore)} · no daily bonus left today.`}</p>
+        <div class="brain-summary-stats">
+          <span><strong>${esc(summary.correct)}</strong> correct</span>
+          <span><strong>${esc(summary.wrong)}</strong> missed</span>
+          <span><strong>${esc(summary.bestStreak)}</strong> best streak</span>
+          <span><strong>${esc(summary.answered)}</strong> puzzles</span>
+        </div>
+        <div class="toolbar mt-1">
+          <button type="button" class="btn btn-primary" data-action="brain-start">Play again</button>
+          <button type="button" class="btn" data-action="nav" data-view="brain">School board</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="dashboard">Back to dashboard</button>
+        </div>
+      </section>
+      ${brainLeaderboardPanel()}`;
+  }
+
+  const session = state.brainSession;
+  if (!session || !session.puzzle) {
+    return `
+      ${pageHead("Practice game", "Brain Sprint", "A 60-second mixed puzzle sprint. Always available, always separate from exams.")}
+      <section class="panel brain-intro">
+        <div class="brain-intro-copy">
+          <span class="eyebrow">Ready when you are</span>
+          <h2>Three puzzles, one minute, endless rounds.</h2>
+          <p>Rotate through number targets, sequences and pattern grids. Every answer is checked on the server, so only real rounds reach the leaderboard.</p>
+          ${brainRuleChips()}
+          <div class="toolbar mt-1">
+            <button type="button" class="btn btn-primary btn-lg" data-action="brain-start">Start a sprint</button>
+          </div>
+        </div>
+        <div class="brain-intro-art" aria-hidden="true">
+          <span>7</span><span>×</span><span>?</span>
+          <small>Think fast · streak hard</small>
+        </div>
+      </section>
+      ${brainLeaderboardPanel()}`;
+  }
+
+  const puzzle = session.puzzle;
+  const feedback = state.brainFeedback;
+  const options = puzzle.options.map((option, index) => {
+    return `
+      <button type="button" class="brain-option" data-action="brain-answer" data-index="${index}" ${state.brainBusy || state.brainFinishing ? "disabled" : ""}>
+        <span class="brain-option-key">${letter(index)}</span>
+        <span>${esc(option)}</span>
+      </button>`;
+  }).join("");
+
+  let visual = "";
+  if (puzzle.type === "target") {
+    visual = `<div class="brain-expression">${esc(puzzle.expression)}</div>`;
+  } else if (puzzle.type === "sequence") {
+    visual = `<div class="brain-sequence">${(puzzle.sequence || []).map(value => `<span>${esc(value)}</span>`).join("")}<span class="is-next">?</span></div>`;
+  } else {
+    visual = `
+      <div class="brain-grid" role="img" aria-label="Three by three number pattern with one missing tile">
+        ${(puzzle.cells || []).map((value, index) => `
+          <span class="brain-cell ${index === puzzle.missingIndex ? "is-missing" : ""}">${value === null ? "?" : esc(value)}</span>`).join("")}
+      </div>`;
+  }
+
+  const feedbackHtml = feedback
+    ? `<div class="brain-feedback ${feedback.correct ? "is-correct" : "is-wrong"}" role="status">
+        <strong>${feedback.correct ? `Correct · +${esc(feedback.earned)} points` : `Not quite · −${esc(feedback.penaltySeconds)}s`}</strong>
+        <span>${feedback.correct
+          ? `Streak ${esc(session.streak)} · ${esc(session.multiplier)}× multiplier`
+          : `Answer: ${esc(feedback.correctOption || "")}. Streak reset.`}</span>
+      </div>`
+    : "";
+
+  return `
+    <div class="brain-shell">
+      <header class="brain-top">
+        <div class="brain-top-inner">
+          <div class="runner-brand">
+            ${brandMark()}
+            <div>
+              <strong>Brain Sprint</strong>
+              <span>Practice arena · school-wide board</span>
+            </div>
+          </div>
+          <div class="brain-timer" role="timer" aria-label="Time remaining">
+            <span>Time left</span>
+            <strong id="brain-timer" aria-hidden="true">--:--</strong>
+            <progress id="brain-progress" max="60" value="60" aria-label="Time remaining"></progress>
+            <span class="sr-only" id="brain-timer-live" role="status" aria-live="polite"></span>
+          </div>
+          <div class="toolbar">
+            <button type="button" class="btn btn-sm" data-action="brain-finish" ${state.brainBusy || state.brainFinishing ? "disabled" : ""}>${state.brainFinishing ? "Saving…" : "Finish round"}</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="brain-leave">Leave</button>
+          </div>
+        </div>
+      </header>
+      <main class="page brain-main" id="main-content" tabindex="-1">
+        <div class="brain-stats">
+          <div><span>Score</span><strong>${esc(session.score)}</strong></div>
+          <div><span>Streak</span><strong>${esc(session.streak)}</strong></div>
+          <div><span>Multiplier</span><strong>${esc(session.multiplier)}×</strong></div>
+          <div><span>Solved</span><strong>${esc(session.correct)}/${esc(session.answered)}</strong></div>
+        </div>
+        <section class="panel brain-puzzle">
+          <div class="panel-head">
+            <h2 class="panel-title">${esc(puzzle.label)}</h2>
+            <span class="pill">Puzzle ${esc(session.position + 1)}</span>
+          </div>
+          <div class="panel-body">
+            <p class="brain-prompt">${esc(puzzle.prompt)}</p>
+            ${visual}
+            ${feedbackHtml}
+            <div class="brain-options">${options}</div>
+          </div>
+        </section>
+      </main>
+    </div>`;
+}
+
+function brainLeaderboardPanel() {
+  const period = state.brainLeaderboard?.period || { key: state.brainPeriod, label: "This week" };
+  const you = state.brainLeaderboard?.you;
+  return `
+    <section class="panel mt-16">
+      <div class="panel-head">
+        <h2 class="panel-title">Brain Sprint · school board</h2>
+        <div class="toolbar">
+          <label class="lb-picker">
+            <span class="sr-only">Brain Sprint leaderboard period</span>
+            <select data-brain-period>
+              ${BRAIN_PERIODS.map(([value, label]) => `<option value="${value}" ${value === period.key ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <button type="button" class="btn btn-sm" data-action="refresh-brain-board">Refresh</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${you && you.rank ? `<p class="small mb-1">You are <strong>#${esc(you.rank)}</strong> with ${esc(you.points)} points across ${esc(you.rounds)} round${you.rounds === 1 ? "" : "s"}.</p>` : ""}
+        ${brainBoardRows()}
+        <p class="form-note mt-1">${esc(period.label)} · ${esc(state.brainLeaderboard?.roundsCount || 0)} completed rounds counted. Exam scores never appear here.</p>
+      </div>
+    </section>`;
+}
+
+async function startBrainRound() {
+  if (state.brainBusy || state.brainFinishing) return;
+  state.brainBusy = true;
+  render();
+  try {
+    const result = await api("/game/start", { method: "POST", body: {} });
+    state.brainSession = result.session;
+    state.brainRules = result.rules;
+    state.brainEndsAt = new Date(result.session.endsAt).getTime();
+    state.brainFeedback = null;
+    state.brainSummary = null;
+    state.brainTimerMilestone = "";
+    toast(result.session.score > 0 ? "Sprint resumed." : "Sprint started — think fast!", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.brainBusy = false;
+    render();
+    focusMainContent();
+  }
+}
+
+async function answerBrain(chosenIndex) {
+  const session = state.brainSession;
+  if (!session || state.brainBusy || state.brainFinishing) return;
+  const position = Number(session.position);
+  state.brainBusy = true;
+  render();
+  try {
+    const result = await api("/game/answer", {
+      method: "POST",
+      body: { sessionId: session.sessionId, position, chosenIndex }
+    });
+    state.brainSession = result.session;
+    state.brainEndsAt = new Date(result.session.endsAt).getTime();
+    state.brainFeedback = result.answer;
+    if (result.answer.penaltySeconds) {
+      state.brainTimerMilestone = "";
+    }
+  } catch (error) {
+    if (error.status === 410) {
+      await finishBrainRound(true);
+      return;
+    }
+    if (error.status === 409) {
+      await loadBrainSession();
+      toast(error.message, "warn");
+    } else {
+      toast(error.message, "error");
+    }
+  } finally {
+    state.brainBusy = false;
+    render();
+  }
+}
+
+async function finishBrainRound(auto = false) {
+  const session = state.brainSession;
+  if (!session || state.brainFinishing) return;
+  state.brainFinishing = true;
+  stopBrainTimer();
+  render();
+  try {
+    const result = await api("/game/finish", {
+      method: "POST",
+      body: { sessionId: session.sessionId }
+    });
+    state.brainSummary = result.summary;
+    state.brainSession = null;
+    state.brainEndsAt = null;
+    state.brainFeedback = null;
+    await loadBrainLeaderboard();
+    toast(`Sprint saved: ${result.summary.score} points${result.summary.dailyBonus ? " including your daily bonus" : ""}.`, "success");
+    if (result.summary.dailyBonus || Number(result.summary.bestStreak) >= 4) celebrate();
+  } catch (error) {
+    if (error.status === 409 || error.status === 404) {
+      await loadBrainSession();
+    } else {
+      toast(error.message, "error");
+    }
+  } finally {
+    state.brainFinishing = false;
+    if (!auto) focusMainContent();
+    render();
+  }
+}
+
+function leaveBrainRound() {
+  if (!window.confirm("Leave this sprint? Your unfinished round will expire and its score will not be saved.")) return;
+  stopBrainTimer();
+  state.brainSession = null;
+  state.brainEndsAt = null;
+  state.brainFeedback = null;
+  state.brainSummary = null;
+  state.view = "dashboard";
+  render();
+  focusMainContent();
+  scrollToTop();
+}
+
 function renderStudentResults() {
   const d = state.data;
   return `
@@ -3479,6 +3870,7 @@ function renderStudentResults() {
 
 function beginAttempt(attempt) {
   clearTimer();
+  stopBrainTimer();
   timerMilestone = "";
   state.attempt = attempt;
   state.currentIndex = 0;
@@ -4475,6 +4867,27 @@ async function runAction(button) {
         toast(error.message, "error");
       }
       return;
+    case "brain-start":
+      await startBrainRound();
+      return;
+    case "brain-answer":
+      await answerBrain(Number(button.dataset.index));
+      return;
+    case "brain-finish":
+      await finishBrainRound(false);
+      return;
+    case "brain-leave":
+      leaveBrainRound();
+      return;
+    case "refresh-brain-board":
+      try {
+        await loadBrainLeaderboard();
+        render();
+        focusMainContent();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
     case "open-material-dialog":
       openMaterialDialog();
       return;
@@ -4850,6 +5263,7 @@ async function runAction(button) {
 async function logout() {
   closeModal();
   clearTimer();
+  stopBrainTimer();
   try {
     await api("/auth/logout", { method: "POST", ignoreAuth: true });
   } catch {
@@ -5457,6 +5871,19 @@ document.addEventListener("change", async event => {
     return;
   }
 
+  const brainPeriodSelect = event.target.closest("[data-brain-period]");
+  if (brainPeriodSelect) {
+    state.brainPeriod = brainPeriodSelect.value;
+    try {
+      await loadBrainLeaderboard();
+      render();
+      focusAfterRender("[data-brain-period]");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
   const classSelect = event.target.closest("[data-leaderboard-class]");
   if (classSelect) {
     state.leaderboardClassId = Number(classSelect.value) || null;
@@ -5517,7 +5944,7 @@ window.addEventListener("storage", event => {
 });
 
 window.addEventListener("beforeunload", event => {
-  if (!state.attempt) return;
+  if (!state.attempt && !(state.view === "brain" && state.brainSession)) return;
   event.preventDefault();
   event.returnValue = "";
 });

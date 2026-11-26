@@ -56,6 +56,10 @@ async function resetDatabase() {
     "activity_logs",
     "announcements",
     "attempts",
+    "game_active",
+    "game_daily",
+    "game_scores",
+    "game_sessions",
     "class_names",
     "classes",
     "complaints",
@@ -2404,5 +2408,136 @@ test("secured portal end-to-end API flow", async t => {
     const downloaded = await studentAgent.get(`/api/materials/${material.body.material.id}/file`);
     assert.equal(downloaded.status, 200);
     assert.equal(Buffer.compare(downloaded.body, fileBytes), 0);
+  });
+
+  await t.test("Brain Sprint is student-only and generates puzzles on the server", async () => {
+    const adminView = await adminAgent.get("/api/game/session");
+    assert.equal(adminView.status, 403);
+    const teacherView = await teacherAgent.get("/api/game/session");
+    assert.equal(teacherView.status, 403);
+
+    const started = await studentAgent.post("/api/game/start").set(CSRF).send({});
+    assert.equal(started.status, 200);
+    assert.equal(started.body.session.status, "in_progress");
+    assert.equal(started.body.session.position, 0);
+    assert.equal(started.body.rules.roundSeconds, 60);
+    assert.equal(started.body.rules.wrongPenaltySeconds, 5);
+    assert.equal(started.body.rules.dailyBonusPoints, 100);
+    assert.ok(["target", "sequence", "grid"].includes(started.body.session.puzzle.type));
+    assert.equal(started.body.session.puzzle.correctIndex, undefined);
+    assert.equal(started.body.session.puzzle.options.length, 4);
+
+    const resumed = await studentAgent.post("/api/game/start").set(CSRF).send({});
+    assert.equal(resumed.body.session.sessionId, started.body.session.sessionId);
+
+    const current = await studentAgent.get("/api/game/session");
+    assert.equal(current.status, 200);
+    assert.equal(current.body.session.sessionId, started.body.session.sessionId);
+
+    const me = await studentAgent.get("/api/auth/me");
+    const activeLocks = await listWhere("game_active", "student_id", me.body.user.id);
+    assert.equal(activeLocks.length, 1);
+    assert.equal(Number(activeLocks[0].session_id), started.body.session.sessionId);
+  });
+
+  await t.test("Brain Sprint validates answers, applies the penalty and rotates puzzles", async () => {
+    const before = await studentAgent.get("/api/game/session");
+    const session = before.body.session;
+    assert.ok(session, "an active sprint should exist");
+
+    const stored = await getDocById("game_sessions", session.sessionId);
+    assert.ok(Number.isInteger(Number(stored.puzzle.correctIndex)));
+
+    const wrongIndex = (Number(stored.puzzle.correctIndex) + 1) % 4;
+    const wrong = await studentAgent.post("/api/game/answer").set(CSRF).send({
+      sessionId: session.sessionId,
+      position: session.position,
+      chosenIndex: wrongIndex
+    });
+    assert.equal(wrong.status, 200);
+    assert.equal(wrong.body.answer.correct, false);
+    assert.equal(wrong.body.answer.penaltySeconds, 5);
+    assert.equal(
+      wrong.body.answer.correctOption,
+      String(stored.puzzle.options[Number(stored.puzzle.correctIndex)])
+    );
+    assert.equal(wrong.body.session.streak, 0);
+    assert.equal(wrong.body.session.wrong, 1);
+    assert.equal(wrong.body.session.score, 0);
+    assert.equal(wrong.body.session.position, 1);
+    assert.notEqual(wrong.body.session.puzzle.type, session.puzzle.type);
+    assert.ok(new Date(wrong.body.session.endsAt) > new Date(session.endsAt));
+
+    const stale = await studentAgent.post("/api/game/answer").set(CSRF).send({
+      sessionId: session.sessionId,
+      position: session.position,
+      chosenIndex: wrongIndex
+    });
+    assert.equal(stale.status, 409);
+
+    const nextStored = await getDocById("game_sessions", session.sessionId);
+    const correctIndex = Number(nextStored.puzzle.correctIndex);
+    const correct = await studentAgent.post("/api/game/answer").set(CSRF).send({
+      sessionId: session.sessionId,
+      position: nextStored.position,
+      chosenIndex: correctIndex
+    });
+    assert.equal(correct.status, 200);
+    assert.equal(correct.body.answer.correct, true);
+    assert.equal(correct.body.answer.earned, 100);
+    assert.equal(correct.body.session.score, 100);
+    assert.equal(correct.body.session.streak, 1);
+    assert.equal(correct.body.answer.nextMultiplier, 1.25);
+    assert.equal(correct.body.session.puzzle.correctIndex, undefined);
+  });
+
+  await t.test("Brain Sprint scores finish once, awards the daily bonus once, and stays off exam boards", async () => {
+    const beforeFinish = await studentAgent.get("/api/game/session");
+    const sessionId = beforeFinish.body.session.sessionId;
+    const examBefore = await studentAgent.get("/api/student/leaderboard");
+
+    const finished = await studentAgent.post("/api/game/finish").set(CSRF).send({ sessionId });
+    assert.equal(finished.status, 200);
+    assert.equal(finished.body.summary.baseScore, 100);
+    assert.equal(finished.body.summary.dailyBonus, 100);
+    assert.equal(finished.body.summary.score, 200);
+
+    const again = await studentAgent.post("/api/game/finish").set(CSRF).send({ sessionId });
+    assert.equal(again.status, 200);
+    assert.equal(again.body.alreadyFinished, true);
+    assert.equal(again.body.summary.score, 200);
+    assert.equal(again.body.summary.dailyBonus, 100);
+
+    const gameBoard = await studentAgent.get("/api/game/leaderboard");
+    assert.equal(gameBoard.status, 200);
+    assert.equal(gameBoard.body.period.key, "week");
+    assert.ok(gameBoard.body.you);
+    assert.equal(gameBoard.body.you.points, 200);
+    assert.equal(gameBoard.body.you.rounds, 1);
+
+    const examAfter = await studentAgent.get("/api/student/leaderboard");
+    assert.deepEqual(examAfter.body.leaderboard, examBefore.body.leaderboard);
+
+    const second = await studentAgent.post("/api/game/start").set(CSRF).send({});
+    assert.equal(second.status, 200);
+    assert.notEqual(second.body.session.sessionId, sessionId);
+    const stored = await getDocById("game_sessions", second.body.session.sessionId);
+    const answer = await studentAgent.post("/api/game/answer").set(CSRF).send({
+      sessionId: second.body.session.sessionId,
+      position: stored.position,
+      chosenIndex: Number(stored.puzzle.correctIndex)
+    });
+    assert.equal(answer.status, 200);
+    const secondFinish = await studentAgent.post("/api/game/finish").set(CSRF).send({
+      sessionId: second.body.session.sessionId
+    });
+    assert.equal(secondFinish.body.summary.dailyBonus, 0);
+
+    const me = await studentAgent.get("/api/auth/me");
+    const allGameScores = await listWhere("game_scores", "student_id", me.body.user.id);
+    assert.equal(allGameScores.length, 2);
+
+    const finalSession = await studentAgent.get("/api/game/session");
+    assert.equal(finalSession.body.session, null);
   });
 });
