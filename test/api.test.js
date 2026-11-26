@@ -30,6 +30,7 @@ const {
 } = require("../server/fdb");
 const { ensureSettings } = require("../server/settings");
 const { createSubject } = require("../server/subjects");
+const { blobIdFor } = require("../server/material-blobs");
 const { hashPassword } = require("../server/security");
 
 const CSRF = { "X-Requested-With": "XMLHttpRequest" };
@@ -58,6 +59,7 @@ async function resetDatabase() {
     "class_names",
     "classes",
     "complaints",
+    "material_blobs",
     "materials",
     "meta",
     "questions",
@@ -66,6 +68,7 @@ async function resetDatabase() {
     "subject_names",
     "subjects",
     "submissions",
+    "uploads",
     "usernames",
     "users"
   ];
@@ -78,7 +81,16 @@ async function resetDatabase() {
   scienceSubjectId = await createSubject("Science");
 }
 
-async function createUser({ name, username, password, role, classId = null, mustChange = 0, subjectIds = [] }) {
+async function createUser({
+  name,
+  username,
+  password,
+  role,
+  classId = null,
+  classIds = [],
+  mustChange = 0,
+  subjectIds = []
+}) {
   const passwordHash = await hashPassword(password);
   return insertUser({
     name,
@@ -86,6 +98,7 @@ async function createUser({ name, username, password, role, classId = null, must
     password_hash: passwordHash,
     role,
     class_id: classId,
+    class_ids: classIds,
     subject_ids: subjectIds,
     must_change_password: Boolean(mustChange)
   });
@@ -214,12 +227,14 @@ test("secured portal end-to-end API flow", async t => {
         name: "Teacher One",
         username: "teacher.one",
         role: "teacher",
+        classIds: [classId, secondClassId],
         subjectIds: [mathsSubjectId, scienceSubjectId]
       });
     assert.equal(teacher.status, 201);
     assert.equal(teacher.body.user.mustChangePassword, true);
     teacher1Id = teacher.body.user.id;
     assert.deepEqual(teacher.body.user.subjectIds, [mathsSubjectId, scienceSubjectId]);
+    assert.deepEqual(teacher.body.user.classIds.sort(), [classId, secondClassId].sort());
     assert.ok(teacher.body.temporaryPassword.length >= 10);
 
     const teacher2 = await adminAgent
@@ -229,10 +244,12 @@ test("secured portal end-to-end API flow", async t => {
         name: "Teacher Two",
         username: "teacher.two",
         role: "teacher",
+        classIds: [secondClassId],
         subjectIds: [mathsSubjectId]
       });
     assert.equal(teacher2.status, 201);
     teacher2Id = teacher2.body.user.id;
+    assert.deepEqual(teacher2.body.user.classIds, [secondClassId]);
 
     const student = await adminAgent
       .post("/api/admin/users")
@@ -338,6 +355,43 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(restore.status, 200);
   });
 
+  await t.test("teacher class scope is explicitly assigned and revocable", async () => {
+    const assigned = await adminAgent
+      .patch(`/api/admin/users/${teacher2Id}`)
+      .set(CSRF)
+      .send({ classIds: [classId] });
+    assert.equal(assigned.status, 200);
+    assert.deepEqual(assigned.body.user.classIds, [classId]);
+    assert.deepEqual(assigned.body.user.classNames, ["Basic 8A - Gold"]);
+
+    const granted = await teacher2Agent.get("/api/teacher/bootstrap");
+    assert.equal(granted.status, 200);
+    assert.ok(granted.body.manageableClasses.some(item => Number(item.id) === Number(classId)));
+    assert.ok(!granted.body.manageableClasses.some(item => Number(item.id) === Number(secondClassId)));
+
+    const invalid = await adminAgent
+      .patch(`/api/admin/users/${teacher2Id}`)
+      .set(CSRF)
+      .send({ classIds: [999999] });
+    assert.equal(invalid.status, 400);
+
+    const revoked = await adminAgent
+      .patch(`/api/admin/users/${teacher2Id}`)
+      .set(CSRF)
+      .send({ classIds: [secondClassId] });
+    assert.equal(revoked.status, 200);
+
+    const denied = await teacher2Agent.get("/api/teacher/bootstrap");
+    assert.equal(denied.status, 200);
+    assert.ok(!denied.body.manageableClasses.some(item => Number(item.id) === Number(classId)));
+    assert.ok(denied.body.manageableClasses.some(item => Number(item.id) === Number(secondClassId)));
+
+    const adminView = await adminAgent.get("/api/admin/bootstrap");
+    const listed = adminView.body.users.find(item => Number(item.id) === Number(teacher2Id));
+    assert.deepEqual(listed.classIds, [secondClassId]);
+    assert.deepEqual(listed.classNames, ["Basic 8B"]);
+  });
+
   await t.test("teacher builds a question bank and a class quiz", async () => {
     const first = await teacherAgent
       .post("/api/teacher/questions")
@@ -431,7 +485,7 @@ test("secured portal end-to-end API flow", async t => {
         minutes: 20,
         questionIds: [firstQuestionId]
       });
-    assert.equal(otherTeacherQuiz.status, 400);
+    assert.equal(otherTeacherQuiz.status, 403);
   });
 
   await t.test("question bank assigns classes, groups by subject and supports bulk moves", async () => {
@@ -541,7 +595,7 @@ test("secured portal end-to-end API flow", async t => {
       .post("/api/teacher/questions/move")
       .set(CSRF)
       .send({ ids, classId: 999999 });
-    assert.equal(invalidMove.status, 400);
+    assert.equal(invalidMove.status, 403);
   });
 
   await t.test("quiz begin and end times gate student access", async () => {
@@ -720,7 +774,7 @@ test("secured portal end-to-end API flow", async t => {
     const unassignedRow = await teacher2Agent
       .post("/api/teacher/questions/import")
       .set(CSRF)
-      .field("classId", String(classId))
+      .field("classId", String(secondClassId))
       .field("subjectId", String(mathsSubjectId))
       .attach("file", Buffer.from(scienceCsv, "utf8"), {
         filename: "science.csv",
@@ -734,7 +788,7 @@ test("secured portal end-to-end API flow", async t => {
     const unassignedDefault = await teacher2Agent
       .post("/api/teacher/questions/import")
       .set(CSRF)
-      .field("classId", String(classId))
+      .field("classId", String(secondClassId))
       .field("subjectId", String(scienceSubjectId))
       .attach("file", Buffer.from(plainCsv, "utf8"), {
         filename: "questions.csv",
@@ -1049,12 +1103,17 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(roster.status, 200);
     assert.ok(roster.body.students.some(student => student.id === student2Id));
 
-    // A teacher can only manage classes they own a quiz for: moving the
-    // student into a class they do not teach must be rejected.
+    // A teacher can only manage explicitly assigned classes: moving the
+    // student into a class outside their scope must be rejected.
+    const unassigned = await adminAgent
+      .post("/api/admin/classes")
+      .set(CSRF)
+      .send({ name: "Unassigned Teacher Class" });
+    assert.equal(unassigned.status, 201);
     const deniedMove = await teacherAgent
       .patch(`/api/teacher/students/${student2Id}`)
       .set(CSRF)
-      .send({ classId: secondClassId });
+      .send({ classId: unassigned.body.class.id });
     assert.equal(deniedMove.status, 403);
 
     const createSecondClassQuestion = async questionText => {
@@ -1411,7 +1470,11 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(byName.body.users[0].className, "Basic 8A - Gold");
 
     const byClass = await adminAgent.get(`/api/admin/search?classId=${classId}`);
-    assert.ok(byClass.body.users.every(user => Number(user.classId) === Number(classId)));
+    assert.ok(byClass.body.users.every(user =>
+      Number(user.classId) === Number(classId)
+      || (user.classIds || []).map(Number).includes(Number(classId))
+    ));
+    assert.ok(byClass.body.users.some(user => Number(user.id) === Number(teacher1Id)));
 
     const byClassName = await adminAgent.get("/api/admin/search?q=Basic%208B");
     assert.ok(byClassName.body.classes.some(cls => cls.id === secondClassId));
@@ -1617,10 +1680,11 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(Number(adminView.body.class.id), Number(outsideId));
     assert.equal(adminView.body.leaderboard.length, 0);
 
-    const unscopedTeacher = await teacher2Agent.get("/api/leaderboard");
-    assert.equal(unscopedTeacher.status, 200);
-    assert.equal(unscopedTeacher.body.class, null);
-    assert.deepEqual(unscopedTeacher.body.classes, []);
+    const scopedTeacher = await teacher2Agent.get("/api/leaderboard");
+    assert.equal(scopedTeacher.status, 200);
+    assert.equal(Number(scopedTeacher.body.class.id), Number(secondClassId));
+    assert.ok(scopedTeacher.body.classes.some(item => Number(item.id) === Number(secondClassId)));
+    assert.ok(!scopedTeacher.body.classes.some(item => Number(item.id) === Number(outsideId)));
 
     const studentBlocked = await studentAgent.get("/api/leaderboard");
     assert.equal(studentBlocked.status, 403);
@@ -2110,34 +2174,105 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(staffList.body.canManage, true);
     assert.ok(!staffList.body.materials.some(item => item.id === teacherMaterialId));
 
+    const fileBytes = Buffer.from("%PDF-1.4 fallback upload\n");
+
+    const badType = await teacherAgent
+      .post("/api/materials/upload-url")
+      .set(CSRF)
+      .send({
+        fileName: "notes.exe",
+        contentType: "application/x-msdownload",
+        sizeBytes: fileBytes.length,
+        classIds: [classId]
+      });
+    assert.equal(badType.status, 400);
+
+    const mismatchedType = await teacherAgent
+      .post("/api/materials/upload-url")
+      .set(CSRF)
+      .send({
+        fileName: "notes.pdf",
+        contentType: "image/png",
+        sizeBytes: fileBytes.length,
+        classIds: [classId]
+      });
+    assert.equal(mismatchedType.status, 400);
+
     const uploadUrl = await teacherAgent
       .post("/api/materials/upload-url")
       .set(CSRF)
       .send({
         fileName: "notes.pdf",
         contentType: "application/pdf",
-        sizeBytes: 1024,
+        sizeBytes: fileBytes.length,
+        subjectId: mathsSubjectId,
         classIds: [classId]
       });
     assert.equal(uploadUrl.status, 200);
     assert.equal(uploadUrl.body.mode, "firestore");
+    assert.ok(uploadUrl.body.uploadId);
+    assert.equal(uploadUrl.body.chunkSize, 600 * 1024);
 
-    const fileBytes = Buffer.from("%PDF-1.4 fallback upload\n");
+    // Another teacher cannot write into somebody else's upload session.
+    const foreignChunk = await teacher2Agent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: uploadUrl.body.uploadId, index: 0, data: fileBytes.toString("base64") });
+    assert.equal(foreignChunk.status, 403);
+
+    // The session records the real size, so a truncated chunk is rejected.
+    const shortChunk = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: uploadUrl.body.uploadId, index: 0, data: Buffer.from("%PDF").toString("base64") });
+    assert.equal(shortChunk.status, 400);
+
+    const tooEarly = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Incomplete upload",
+        kind: "file",
+        fileType: "pdf",
+        uploadId: uploadUrl.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [classId]
+      });
+    assert.equal(tooEarly.status, 400);
+
+    // Client-supplied path/metadata is ignored; the session remains authoritative.
     const chunk = await teacherAgent
       .post("/api/materials/upload-chunks")
       .set(CSRF)
       .send({
-        storagePath: uploadUrl.body.storagePath,
+        uploadId: uploadUrl.body.uploadId,
         index: 0,
-        total: 1,
         data: fileBytes.toString("base64"),
-        fileName: "notes.pdf",
-        contentType: "application/pdf",
-        sizeBytes: fileBytes.length,
-        classIds: [classId]
+        storagePath: "materials/attacker-controlled.pdf",
+        sizeBytes: 1
       });
     assert.equal(chunk.status, 200);
     assert.equal(chunk.body.complete, true);
+
+    const repeated = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: uploadUrl.body.uploadId, index: 0, data: fileBytes.toString("base64") });
+    assert.equal(repeated.status, 200);
+    assert.equal(repeated.body.complete, true);
+
+    const wrongScope = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Wrong upload scope",
+        kind: "file",
+        fileType: "pdf",
+        uploadId: uploadUrl.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [secondClassId]
+      });
+    assert.equal(wrongScope.status, 403);
 
     const fileMaterial = await teacherAgent
       .post("/api/materials")
@@ -2146,13 +2281,35 @@ test("secured portal end-to-end API flow", async t => {
         title: "Fallback notes",
         kind: "file",
         fileType: "pdf",
-        storagePath: uploadUrl.body.storagePath,
-        fileName: "notes.pdf",
-        sizeBytes: fileBytes.length,
-        classIds: [classId]
+        uploadId: uploadUrl.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [classId],
+        storagePath: "materials/attacker-controlled.pdf",
+        fileName: "evil.exe",
+        sizeBytes: 1
       });
     assert.equal(fileMaterial.status, 201);
     const fileMaterialId = fileMaterial.body.material.id;
+
+    const storedRow = await getDocById("materials", fileMaterialId);
+    assert.equal(storedRow.storage_path, uploadUrl.body.storagePath);
+    assert.equal(storedRow.file_name, "notes.pdf");
+    assert.equal(Number(storedRow.size_bytes), fileBytes.length);
+    assert.equal(storedRow.backend, "firestore");
+    assert.equal(storedRow.upload_id, uploadUrl.body.uploadId);
+
+    const reused = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Reused upload",
+        kind: "file",
+        fileType: "pdf",
+        uploadId: uploadUrl.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [classId]
+      });
+    assert.equal(reused.status, 409);
 
     const fileList = await studentAgent.get("/api/materials");
     assert.equal(fileList.status, 200);
@@ -2160,7 +2317,91 @@ test("secured portal end-to-end API flow", async t => {
     assert.ok(storedFile);
     assert.equal(storedFile.url, `/api/materials/${fileMaterialId}/file`);
 
+    const blobId = blobIdFor(uploadUrl.body.storagePath);
+    await updateDocById("material_blobs", blobId, { class_ids: [secondClassId] });
+    const blobScopeMismatch = await studentAgent.get(storedFile.url);
+    assert.equal(blobScopeMismatch.status, 403);
+    await updateDocById("material_blobs", blobId, { class_ids: [classId] });
+
     const downloaded = await studentAgent.get(storedFile.url);
+    assert.equal(downloaded.status, 200);
+    assert.equal(Buffer.compare(downloaded.body, fileBytes), 0);
+    assert.match(downloaded.headers["content-disposition"], /attachment/);
+    assert.equal(downloaded.headers["x-content-type-options"], "nosniff");
+    assert.match(downloaded.headers["cache-control"], /no-store/);
+  });
+
+  await t.test("fallback uploads are idempotent and order-independent", async () => {
+    const firstChunk = Buffer.alloc(600 * 1024, 0x41);
+    const lastChunk = Buffer.from("%PDF-1.4 final chunk\n");
+    const fileBytes = Buffer.concat([firstChunk, lastChunk]);
+
+    const setup = await teacherAgent
+      .post("/api/materials/upload-url")
+      .set(CSRF)
+      .send({
+        fileName: "large.pdf",
+        contentType: "application/pdf",
+        sizeBytes: fileBytes.length,
+        subjectId: mathsSubjectId,
+        classIds: [classId]
+      });
+    assert.equal(setup.status, 200);
+
+    const outOfOrder = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: setup.body.uploadId, index: 1, data: lastChunk.toString("base64") });
+    assert.equal(outOfOrder.status, 200);
+    assert.equal(outOfOrder.body.complete, false);
+
+    const duplicate = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: setup.body.uploadId, index: 1, data: lastChunk.toString("base64") });
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.body.complete, false);
+
+    const incomplete = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Still uploading",
+        kind: "file",
+        fileType: "pdf",
+        uploadId: setup.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [classId]
+      });
+    assert.equal(incomplete.status, 400);
+
+    const first = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: setup.body.uploadId, index: 0, data: firstChunk.toString("base64") });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.complete, true);
+
+    const tampered = await teacherAgent
+      .post("/api/materials/upload-chunks")
+      .set(CSRF)
+      .send({ uploadId: setup.body.uploadId, index: 0, data: Buffer.alloc(600 * 1024, 0x42).toString("base64") });
+    assert.equal(tampered.status, 409);
+
+    const material = await teacherAgent
+      .post("/api/materials")
+      .set(CSRF)
+      .send({
+        title: "Large fallback file",
+        kind: "file",
+        fileType: "pdf",
+        uploadId: setup.body.uploadId,
+        subjectId: mathsSubjectId,
+        classIds: [classId]
+      });
+    assert.equal(material.status, 201);
+
+    const downloaded = await studentAgent.get(`/api/materials/${material.body.material.id}/file`);
     assert.equal(downloaded.status, 200);
     assert.equal(Buffer.compare(downloaded.body, fileBytes), 0);
   });

@@ -1,7 +1,8 @@
 "use strict";
 
 const express = require("express");
-const { getDocById, listClasses, listWhere } = require("../fdb");
+const { getDocById, listClasses } = require("../fdb");
+const { allowedClassIds } = require("../class-access");
 const { asyncHandler } = require("../utils");
 const { leaderboardPeriodSchema } = require("../validation");
 const {
@@ -13,28 +14,17 @@ const {
 const router = express.Router();
 
 async function visibleClasses(user) {
-  const [classes, ownedQuizzes] = await Promise.all([
+  const [classes, allowed] = await Promise.all([
     listClasses(),
-    user.role === "teacher"
-      ? listWhere("quizzes", "teacher_id", user.id)
-      : Promise.resolve([])
+    allowedClassIds(user)
   ]);
-
-  let allowed = classes;
-  if (user.role === "teacher") {
-    const ownedIds = new Set(
-      ownedQuizzes
-        .map(quiz => Number(quiz.class_id))
-        .filter(id => Number.isInteger(id) && id > 0)
-    );
-    allowed = classes.filter(cls => ownedIds.has(Number(cls.id)));
-  }
-
-  return [...allowed].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return classes
+    .filter(cls => allowed.has(Number(cls.id)))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 // Read-only staff view. Students keep their own class-only endpoint; teachers
-// may only select classes they own a quiz for, and admins may select any class.
+// may only select classes assigned to their account, and admins may select any class.
 router.get("/", asyncHandler(async (req, res) => {
   const periodKey = leaderboardPeriodSchema.parse(req.query.period);
   const classes = await visibleClasses(req.user);

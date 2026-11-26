@@ -254,6 +254,7 @@ async function createUser(data) {
     password_hash: data.password_hash,
     role: data.role,
     class_id: data.class_id === undefined ? null : data.class_id,
+    class_ids: data.class_ids === undefined ? [] : data.class_ids,
     subject_ids: data.subject_ids === undefined ? [] : data.subject_ids,
     active: data.active === undefined ? true : data.active,
     must_change_password: data.must_change_password === undefined ? false : data.must_change_password,

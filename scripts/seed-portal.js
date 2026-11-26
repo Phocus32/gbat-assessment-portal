@@ -108,11 +108,22 @@ async function ensureClasses(html, created) {
   return classes;
 }
 
-async function ensureTeacher(created) {
+async function ensureTeacher(classes, created) {
   const teachers = (await listWhere("users", "role", "teacher"))
     .filter(user => user.active)
     .sort((a, b) => a.id - b.id);
-  if (teachers[0]) return teachers[0];
+  if (teachers[0]) {
+    const existing = teachers[0];
+    const assigned = Array.isArray(existing.class_ids)
+      ? existing.class_ids.map(Number)
+      : [];
+    const expected = classes.map(cls => Number(cls.id)).sort((a, b) => a - b);
+    if (assigned.length !== expected.length || !expected.every(id => assigned.includes(id))) {
+      await updateDocById("users", existing.id, { class_ids: expected });
+      existing.class_ids = expected;
+    }
+    return existing;
+  }
 
   const name = (process.env.IMPORT_TEACHER_NAME || "Learners Connect Teacher").trim();
   const baseUsername = (process.env.IMPORT_TEACHER_USERNAME || "gbat.teacher").trim();
@@ -130,6 +141,7 @@ async function ensureTeacher(created) {
     username,
     password_hash: passwordHash,
     role: "teacher",
+    class_ids: classes.map(cls => cls.id),
     must_change_password: true
   });
   await logActivity(null, `Created teacher account "${name}" (${username})`);
@@ -239,7 +251,7 @@ async function main(cliOptions, { quiet = false } = {}) {
 
   const admin = await ensureAdmin(created);
   const classes = await ensureClasses(html, created);
-  const teacher = await ensureTeacher(created);
+  const teacher = await ensureTeacher(classes, created);
 
   const questionRows = (await listWhere("questions", "created_by", teacher.id))
     .sort((a, b) => a.id - b.id);

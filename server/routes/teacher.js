@@ -17,6 +17,7 @@ const {
   recentDocs
 } = require("../fdb");
 const { getSettings } = require("../settings");
+const { assertClassAllowed, allowedClassIds } = require("../class-access");
 const { subjectIdsOf, assertSubjectsAllowed, subjectMap } = require("../subjects");
 const { buildStudentTemplate } = require("../excel");
 const { assertQuizWindow, effectiveDeadline, quizWindow, readDate } = require("../quiz-window");
@@ -72,38 +73,11 @@ function mapQuestion(row, classMap = new Map()) {
   };
 }
 
-async function assertClassExists(classId) {
-  const cls = await getDocById("classes", classId);
-  if (!cls) {
-    const error = new Error("Class not found.");
-    error.status = 400;
-    throw error;
-  }
-  return cls;
-}
-
 async function loadOwnedQuiz(quizId, teacherId) {
   const quiz = await getDocById("quizzes", quizId);
   if (!quiz || quiz.is_deleted || Number(quiz.teacher_id) !== Number(teacherId)) return null;
   const cls = await getDocById("classes", quiz.class_id);
   return { ...quiz, class_name: cls ? cls.name : null };
-}
-
-/**
- * A teacher's roster scope is the set of classes where they own a quiz.
- * Archived quizzes still count so archiving the last quiz does not revoke
- * access to a class the teacher already manages.
- */
-function ownedClassIdSet(quizzes) {
-  return new Set(
-    quizzes
-      .map(quiz => Number(quiz.class_id))
-      .filter(classId => Number.isInteger(classId) && classId > 0)
-  );
-}
-
-async function teacherClassIds(teacherId) {
-  return ownedClassIdSet(await listWhere("quizzes", "teacher_id", teacherId));
 }
 
 async function buildQuizResults(quiz) {
@@ -237,14 +211,15 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
   const teacherId = req.user.id;
   const allowedIds = subjectIdsOf(req.user);
 
-  const [allQuestions, ownedQuizzes, classes, announcements, settings, allSubjects, students] = await Promise.all([
+  const [allQuestions, ownedQuizzes, classes, announcements, settings, allSubjects, students, assignedClassIds] = await Promise.all([
     listWhere("questions", "created_by", teacherId),
     listWhere("quizzes", "teacher_id", teacherId),
     listClasses(),
     recentDocs("announcements", 50),
     getSettings(),
     subjectMap(),
-    listWhere("users", "role", "student")
+    listWhere("users", "role", "student"),
+    allowedClassIds(req.user)
   ]);
 
   const allowedSet = new Set(allowedIds);
@@ -258,14 +233,15 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     return id !== undefined && allowedSet.has(Number(id));
   };
 
-  const questions = allQuestions.filter(inScope);
+  const questions = allQuestions.filter(row => inScope(row)
+    && (row.class_id === null || row.class_id === undefined || assignedClassIds.has(Number(row.class_id))));
   const subjects = allowedIds
     .map(id => ({ id: Number(id), name: allSubjects.get(Number(id)) }))
     .filter(item => item.name)
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
-  const ownedClassIds = ownedClassIdSet(ownedQuizzes);
+  const manageableClassIds = assignedClassIds;
   const quizzes = ownedQuizzes
     .filter(quiz => !quiz.is_deleted && inScope(quiz))
     .sort((a, b) => Number(b.id) - Number(a.id));
@@ -361,10 +337,10 @@ router.get("/bootstrap", asyncHandler(async (req, res) => {
     }),
     classes: classes.map(cls => ({ id: cls.id, name: cls.name })),
     manageableClasses: classes
-      .filter(cls => ownedClassIds.has(Number(cls.id)))
+      .filter(cls => manageableClassIds.has(Number(cls.id)))
       .map(cls => ({ id: cls.id, name: cls.name })),
     students: students
-      .filter(student => student.role === "student" && ownedClassIds.has(Number(student.class_id)))
+      .filter(student => student.role === "student" && manageableClassIds.has(Number(student.class_id)))
       .map(student => ({
         id: student.id,
         name: student.name,
@@ -434,7 +410,7 @@ router.post("/questions/import", uploadQuestions.single("file"), asyncHandler(as
   if (input.subjectId && !(await assertSubjectsAllowed([input.subjectId], req.user))) {
     return res.status(403).json({ error: "That subject is not assigned to your account." });
   }
-  const cls = await assertClassExists(input.classId);
+  const cls = await assertClassAllowed(req.user, input.classId);
 
   const result = await importQuestionsFromBuffer(req.file.buffer, req.file.originalname, {
     actor: req.user,
@@ -453,7 +429,7 @@ router.post("/questions", asyncHandler(async (req, res) => {
     return res.status(403).json({ error: "That subject is not assigned to your account." });
   }
 
-  const [names, cls] = await Promise.all([subjectMap(), assertClassExists(input.classId)]);
+  const [names, cls] = await Promise.all([subjectMap(), assertClassAllowed(req.user, input.classId)]);
   const subjectName = names.get(Number(input.subjectId)) || "General";
   const questionId = await insertDoc("questions", {
     question_text: input.questionText,
@@ -515,7 +491,7 @@ router.post("/questions/move", asyncHandler(async (req, res) => {
   const input = questionMoveSchema.parse(req.body);
   const { error } = await checkQuestionsMutable(input.ids, req.user, "move");
   if (error) return res.status(error.status).json({ error: error.message });
-  const cls = await assertClassExists(input.classId);
+  const cls = await assertClassAllowed(req.user, input.classId);
 
   for (const id of input.ids) {
     await updateDocById("questions", id, {
@@ -595,8 +571,7 @@ router.post("/quizzes", asyncHandler(async (req, res) => {
     });
   }
 
-  const cls = await getDocById("classes", input.classId);
-  if (!cls) return res.status(400).json({ error: "Class not found." });
+  const cls = await assertClassAllowed(req.user, input.classId);
 
   const questionDocs = await getManyByIds("questions", input.questionIds);
   const questionMap = new Map(
@@ -812,7 +787,7 @@ router.get("/students", asyncHandler(async (req, res) => {
   const [students, classes, classIds] = await Promise.all([
     listWhere("users", "role", "student"),
     listClasses(),
-    teacherClassIds(req.user.id)
+    allowedClassIds(req.user)
   ]);
   const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
   return res.json({
@@ -835,12 +810,11 @@ router.patch("/students/:id", asyncHandler(async (req, res) => {
   const input = teacherStudentUpdateSchema.parse(req.body);
 
   const target = await getDocById("users", studentId);
-  const classIds = await teacherClassIds(req.user.id);
+  const classIds = await allowedClassIds(req.user);
   if (!target || target.role !== "student" || !classIds.has(Number(target.class_id))) {
     return res.status(404).json({ error: "Student not found." });
   }
-  const cls = await getDocById("classes", input.classId);
-  if (!cls) return res.status(400).json({ error: "Class not found." });
+  const cls = await assertClassAllowed(req.user, input.classId);
   if (!classIds.has(Number(cls.id))) {
     return res.status(403).json({ error: "You can only move students between classes you teach." });
   }

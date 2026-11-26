@@ -1,6 +1,7 @@
 "use strict";
 
 const { z } = require("zod");
+const config = require("./config");
 
 const passwordSchema = z
   .string()
@@ -59,15 +60,25 @@ const subjectIdsSchema = z
   .array(z.coerce.number().int().positive())
   .max(40, "Too many subjects selected.");
 
+const classIdsSchema = z
+  .array(z.coerce.number().int().positive())
+  .min(1, "Select at least one class.")
+  .max(40, "Too many classes selected.")
+  .refine(ids => new Set(ids).size === ids.length, "Duplicate classes are not allowed.");
+
 const userCreateSchema = z.object({
   name: nameSchema,
   username: usernameSchema,
   role: z.enum(["student", "teacher"]),
   classId: z.coerce.number().int().positive().nullable().optional(),
+  classIds: classIdsSchema.optional(),
   subjectIds: subjectIdsSchema.optional()
 }).superRefine((value, ctx) => {
   if (value.role === "student" && !value.classId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["classId"], message: "Select a class for the student." });
+  }
+  if (value.role === "teacher" && !value.classIds) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["classIds"], message: "Select at least one class for the teacher." });
   }
 });
 
@@ -75,6 +86,7 @@ const userUpdateSchema = z.object({
   name: nameSchema.optional(),
   active: z.boolean().optional(),
   classId: z.coerce.number().int().positive().nullable().optional(),
+  classIds: classIdsSchema.optional(),
   subjectIds: subjectIdsSchema.optional()
 });
 
@@ -211,27 +223,20 @@ const materialUploadUrlSchema = z.object({
   fileName: z.string().trim().min(1, "Choose a file.").max(180, "File name is too long."),
   contentType: z.string().trim().min(1).max(120),
   sizeBytes: z.coerce.number().int().positive().max(
-    Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024,
+    config.materialMaxUploadBytes,
     "That file is too large."
   ),
   subjectId: idSchema.nullable().optional(),
   classIds: materialClassIdsSchema
 });
 
+const uploadIdSchema = z.string().trim().min(1).max(80);
+
 const materialChunkSchema = z.object({
-  storagePath: z.string().trim().min(1).max(400),
+  uploadId: uploadIdSchema,
   index: z.coerce.number().int().nonnegative(),
-  total: z.coerce.number().int().positive().max(200),
-  data: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/, "Invalid file chunk."),
-  fileName: z.string().trim().min(1).max(180),
-  contentType: z.string().trim().min(1).max(120),
-  sizeBytes: z.coerce.number().int().positive().max(
-    Number(process.env.MATERIAL_UPLOAD_MAX_MB || 50) * 1024 * 1024,
-    "That file is too large."
-  ),
-  subjectId: idSchema.nullable().optional(),
-  classIds: materialClassIdsSchema
-}).refine(value => value.index < value.total, "Invalid chunk position.");
+  data: z.string().min(1).regex(/^[A-Za-z0-9+/]+={0,2}$/, "Invalid file chunk.").max(900000, "File chunk is too large.")
+});
 
 const materialCreateSchema = z.object({
   title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long."),
@@ -240,24 +245,18 @@ const materialCreateSchema = z.object({
   fileType: materialTypeSchema,
   subjectId: idSchema.nullable().optional(),
   classIds: materialClassIdsSchema,
-  storagePath: z.string().trim().min(1).max(400).optional(),
-  fileName: z.string().trim().min(1).max(180).optional(),
-  sizeBytes: z.coerce.number().int().positive().optional(),
+  uploadId: uploadIdSchema.optional(),
   linkUrl: httpUrlSchema.optional()
 }).superRefine((value, ctx) => {
   if (value.kind === "file") {
-    for (const field of ["storagePath", "fileName", "sizeBytes"]) {
-      if (value[field] === undefined) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Upload the file first." });
-      }
+    if (!value.uploadId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uploadId"], message: "Upload the file first." });
     }
     if (["video", "link"].includes(value.fileType)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["fileType"], message: "Use a link for videos." });
     }
-  } else {
-    if (!value.linkUrl) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["linkUrl"], message: "Enter a link." });
-    }
+  } else if (!value.linkUrl) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["linkUrl"], message: "Enter a link." });
   }
 });
 
@@ -317,6 +316,7 @@ module.exports = {
   classUpdateSchema,
   subjectCreateSchema,
   subjectUpdateSchema,
+  classIdsSchema,
   userCreateSchema,
   userUpdateSchema,
   questionCreateSchema,

@@ -28,6 +28,7 @@ const {
   subjectIdsOf,
   subjectMap
 } = require("../subjects");
+const { classIdsOf } = require("../class-access");
 const { getSettings, saveSettings } = require("../settings");
 const { hashPassword } = require("../security");
 const { quizWindow } = require("../quiz-window");
@@ -67,10 +68,13 @@ function attachClassName(user, classMap, subjectNamesMap = new Map()) {
     ? null
     : (classMap.get(Number(user.class_id)) || null);
   const subjectIds = subjectIdsOf(user);
+  const teacherClassIds = classIdsOf(user);
   return {
     ...publicUser({ ...user, class_name: className }),
     subjectIds,
-    subjectNames: subjectIds.map(id => subjectNamesMap.get(id)).filter(Boolean)
+    subjectNames: subjectIds.map(id => subjectNamesMap.get(id)).filter(Boolean),
+    classIds: teacherClassIds,
+    classNames: teacherClassIds.map(id => classMap.get(id)).filter(Boolean)
   };
 }
 
@@ -201,7 +205,12 @@ router.get("/search", asyncHandler(async (req, res) => {
 
   const matchedUsers = users
     .filter(user => {
-      if (input.classId && Number(user.class_id) !== input.classId) return false;
+      if (input.classId) {
+        const matches = user.role === "teacher"
+          ? classIdsOf(user).includes(Number(input.classId))
+          : Number(user.class_id) === Number(input.classId);
+        if (!matches) return false;
+      }
       if (!term) return true;
       return [user.name, user.username]
         .some(value => String(value || "").toLowerCase().includes(term));
@@ -414,6 +423,7 @@ router.post("/users", asyncHandler(async (req, res) => {
   }
 
   let subjectIds = [];
+  let teacherClassIds = [];
   if (input.role === "teacher") {
     const generalId = await ensureSubject("General");
     const requested = input.subjectIds && input.subjectIds.length
@@ -424,6 +434,12 @@ router.post("/users", asyncHandler(async (req, res) => {
       return res.status(400).json({ error: "One or more selected subjects no longer exist." });
     }
     subjectIds = requested;
+
+    teacherClassIds = [...new Set(input.classIds.map(Number))];
+    const validClasses = await getManyByIds("classes", teacherClassIds);
+    if (validClasses.length !== teacherClassIds.length) {
+      return res.status(400).json({ error: "One or more selected classes no longer exist." });
+    }
   }
 
   const temporaryPassword = generateTemporaryPassword();
@@ -435,6 +451,7 @@ router.post("/users", asyncHandler(async (req, res) => {
     password_hash: passwordHash,
     role: input.role,
     class_id: classId,
+    class_ids: teacherClassIds,
     subject_ids: subjectIds,
     active: true,
     must_change_password: true,
@@ -446,7 +463,9 @@ router.post("/users", asyncHandler(async (req, res) => {
   });
 
   const created = await getDocById("users", userId);
-  const className = classId === null ? null : (await getDocById("classes", classId)).name;
+  const classes = await listClasses();
+  const classMap = new Map(classes.map(cls => [Number(cls.id), cls.name]));
+  const className = classId === null ? null : classMap.get(Number(classId));
   const names = await subjectMap();
 
   await logActivity(req.user, `Created ${input.role} account "${input.name}" (${input.username})`);
@@ -454,7 +473,9 @@ router.post("/users", asyncHandler(async (req, res) => {
     user: {
       ...publicUser({ ...created, class_name: className }),
       subjectIds: subjectIds,
-      subjectNames: subjectIds.map(id => names.get(id)).filter(Boolean)
+      subjectNames: subjectIds.map(id => names.get(id)).filter(Boolean),
+      classIds: teacherClassIds,
+      classNames: teacherClassIds.map(id => classMap.get(id)).filter(Boolean)
     },
     temporaryPassword
   });
@@ -500,6 +521,21 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
     const names = await subjectMap();
     subjectNames = requested.map(id => names.get(id)).filter(Boolean);
     actions.push(`Set subjects for ${target.name} to ${subjectNames.join(", ")}`);
+  }
+
+  let classNames = null;
+  if (input.classIds !== undefined) {
+    if (target.role !== "teacher") {
+      return res.status(400).json({ error: "Only teacher accounts can be assigned classes." });
+    }
+    const requested = [...new Set(input.classIds.map(Number))];
+    const valid = await getManyByIds("classes", requested);
+    if (valid.length !== requested.length) {
+      return res.status(400).json({ error: "One or more selected classes no longer exist." });
+    }
+    patch.class_ids = requested;
+    classNames = valid.map(cls => cls.name).sort((a, b) => String(a).localeCompare(String(b)));
+    actions.push(`Set classes for ${target.name} to ${classNames.join(", ")}`);
   }
 
   if (typeof input.active === "boolean") {
@@ -549,7 +585,13 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
     user: {
       ...publicUser({ ...updated, class_name: className }),
       subjectIds: subjectIdsOf(updated),
-      subjectNames
+      subjectNames,
+      classIds: classIdsOf(updated),
+      classNames: classNames === null
+        ? (await listClasses())
+          .filter(cls => classIdsOf(updated).includes(Number(cls.id)))
+          .map(cls => cls.name)
+        : classNames
     }
   });
 }));

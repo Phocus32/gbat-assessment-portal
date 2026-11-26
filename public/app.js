@@ -506,6 +506,10 @@ function checkbox(value, checked) {
   return `<input type="checkbox" name="subjectIds" value="${Number(value)}" ${checked ? "checked" : ""}>`;
 }
 
+function classCheckbox(value, checked) {
+  return `<input type="checkbox" name="classIds" value="${Number(value)}" ${checked ? "checked" : ""}>`;
+}
+
 /** Adds data-label attributes so tables can become labelled cards on phones. */
 function labelTableCells(root = document) {
   root.querySelectorAll("table").forEach(table => {
@@ -557,8 +561,11 @@ function applyFormVisibility() {
   const userForm = document.querySelector('form[data-form="create-user"]');
   if (userForm) {
     const role = userForm.querySelector('select[name="role"]');
+    const teacherOnly = !role || role.value !== "teacher";
+    const teacherClasses = userForm.querySelector("[data-teacher-classes]");
     const subjects = userForm.querySelector("[data-teacher-subjects]");
-    if (subjects) subjects.hidden = !role || role.value !== "teacher";
+    if (teacherClasses) teacherClasses.hidden = teacherOnly;
+    if (subjects) subjects.hidden = teacherOnly;
   }
 }
 
@@ -921,6 +928,7 @@ function uploadMaterialFile(upload, file) {
       const data = event.data;
       if (!data || data.type !== "material-upload-complete") return;
       if (data.path !== upload.storagePath) return;
+      if (data.uploadId !== upload.uploadId) return;
       finish(true);
     };
     const onLoad = () => {
@@ -970,15 +978,9 @@ async function uploadMaterialChunks(upload, file) {
     await api("/materials/upload-chunks", {
       method: "POST",
       body: {
-        storagePath: upload.storagePath,
+        uploadId: upload.uploadId,
         index,
-        total,
-        data: arrayBufferToBase64(buffer),
-        fileName: file.name,
-        contentType: file.type || "application/octet-stream",
-        sizeBytes: file.size,
-        subjectId: upload.subjectId || null,
-        classIds: upload.classIds
+        data: arrayBufferToBase64(buffer)
       }
     });
   }
@@ -1671,6 +1673,7 @@ function renderAdminUsers() {
                       <button type="button" class="btn btn-sm btn-ghost" data-action="reset-password" data-id="${user.id}">Reset password</button>
                       <button type="button" class="btn btn-sm ${user.active ? "btn-danger" : "btn-success"}" data-action="toggle-user" data-id="${user.id}">${user.active ? "Suspend" : "Activate"}</button>
                       ${user.role === "student" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-move-user" data-id="${user.id}">Move class</button>` : ""}
+                      ${user.role === "teacher" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-assign-classes" data-id="${user.id}">Assign classes</button>` : ""}
                       ${user.role === "teacher" ? `<button type="button" class="btn btn-sm btn-ghost" data-action="open-assign-subjects" data-id="${user.id}">Assign subjects</button>` : ""}
                       <button type="button" class="btn btn-sm btn-ghost" data-action="delete-user" data-id="${user.id}">Delete</button>
                     </div>`;
@@ -4041,6 +4044,15 @@ function openCreateUser() {
             <span class="field-hint">Required for students. Ignored for teachers.</span>
           </div>
         </div>
+        <div class="field" data-teacher-classes>
+          <span class="field-label">Classes</span>
+          <div class="check-grid">
+            ${classes.map(cls => `
+              <label class="check-item">${classCheckbox(cls.id, false)} <span><strong>${esc(cls.name)}</strong></span></label>
+            `).join("") || `<p class="form-note">Create a class first.</p>`}
+          </div>
+          <span class="field-hint">Choose the classes this teacher can manage.</span>
+        </div>
         <div class="field" data-teacher-subjects>
           <span class="field-label">Subjects</span>
           <div class="check-grid">
@@ -4301,6 +4313,39 @@ function openAssignSubjects(userId) {
         <div class="modal-actions modal-actions-flat">
           <button type="button" class="btn" data-action="close-modal">Cancel</button>
           <button type="submit" class="btn btn-primary">Save subjects</button>
+        </div>
+      </form>
+    </div>`);
+}
+
+function openAssignClasses(userId) {
+  const target = state.data.users.find(user => Number(user.id) === Number(userId));
+  if (!target) return;
+  const assigned = (target.classIds || []).map(Number);
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Assign classes</h2>
+        <p>${esc(target.name)} · ${esc(target.username)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="assign-classes">
+        <input type="hidden" name="id" value="${target.id}">
+        <div class="field">
+          <span class="field-label">Classes this teacher can manage</span>
+          <div class="check-grid">
+            ${state.data.classes.map(cls => `
+              <label class="check-item">${classCheckbox(cls.id, assigned.includes(Number(cls.id)))}
+                <span><strong>${esc(cls.name)}</strong></span>
+              </label>`).join("")}
+          </div>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save classes</button>
         </div>
       </form>
     </div>`);
@@ -4584,6 +4629,9 @@ async function runAction(button) {
       return;
     case "open-rename-subject":
       openRenameSubject(id);
+      return;
+    case "open-assign-classes":
+      openAssignClasses(id);
       return;
     case "open-assign-subjects":
       openAssignSubjects(id);
@@ -4944,6 +4992,9 @@ async function handleSubmit(form) {
         if (!classId) throw new Error("Select a class for the student.");
         body.classId = classId;
       } else {
+        const classIds = data.getAll("classIds").map(value => Number(value));
+        if (!classIds.length) throw new Error("Assign at least one class to the teacher.");
+        body.classIds = classIds;
         const subjectIds = data.getAll("subjectIds").map(value => Number(value));
         if (!subjectIds.length) throw new Error("Assign at least one subject to the teacher.");
         body.subjectIds = subjectIds;
@@ -5100,6 +5151,22 @@ async function handleSubmit(form) {
       closeModal();
       await refresh();
       toast("Subject renamed.", "success");
+    });
+    return;
+  }
+
+  if (formType === "assign-classes") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const classIds = data.getAll("classIds").map(value => Number(value));
+      if (!classIds.length) throw new Error("Assign at least one class.");
+      await api(`/admin/users/${Number(data.get("id"))}`, {
+        method: "PATCH",
+        body: { classIds }
+      });
+      closeModal();
+      await refresh();
+      toast("Teacher classes updated.", "success");
     });
     return;
   }
@@ -5323,9 +5390,7 @@ async function handleSubmit(form) {
         } else {
           await uploadMaterialFile(upload, file);
         }
-        payload.storagePath = upload.storagePath;
-        payload.fileName = file.name;
-        payload.sizeBytes = file.size;
+        payload.uploadId = upload.uploadId;
         payload.fileType = upload.fileType;
       } else {
         payload.linkUrl = String(data.get("linkUrl") || "").trim();

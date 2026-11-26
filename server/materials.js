@@ -3,7 +3,7 @@
 /**
  * Learning-material data access. Materials are soft-deleted like quizzes and
  * are always read through a class scope: students see their own class only,
- * teachers see classes where they own a quiz, and admins see everything.
+ * teachers see their explicitly assigned classes, and admins see everything.
  */
 
 const { FieldValue } = require("firebase-admin/firestore");
@@ -13,12 +13,13 @@ const {
   insertDoc,
   listAll,
   listClasses,
-  listWhere,
   updateDocById
 } = require("./fdb");
 const { listSubjects, subjectIdsOf } = require("./subjects");
+const { allowedClassIds: allowedClassIdsFor, classIdsOf } = require("./class-access");
 const { TYPE_LABELS, hasUsableBucket, createReadUrl } = require("./storage");
 const { blobExists } = require("./material-blobs");
+const { consumeUploadSession } = require("./upload-sessions");
 
 function httpError(status, message) {
   const error = new Error(message);
@@ -26,32 +27,8 @@ function httpError(status, message) {
   return error;
 }
 
-function classIdsOf(row) {
-  return Array.isArray(row.class_ids)
-    ? row.class_ids.map(Number).filter(id => Number.isInteger(id) && id > 0)
-    : [];
-}
-
-async function teacherClassIds(user) {
-  const quizzes = await listWhere("quizzes", "teacher_id", user.id);
-  return new Set(
-    quizzes
-      .map(quiz => Number(quiz.class_id))
-      .filter(id => Number.isInteger(id) && id > 0)
-  );
-}
-
 async function allowedClassIds(user) {
-  if (user.role === "admin") {
-    const classes = await listClasses();
-    return new Set(classes.map(cls => Number(cls.id)));
-  }
-  if (user.role === "teacher") return teacherClassIds(user);
-  return new Set(
-    user.class_id === null || user.class_id === undefined
-      ? []
-      : [Number(user.class_id)]
-  );
+  return allowedClassIdsFor(user);
 }
 
 async function manageableClasses(user) {
@@ -94,7 +71,8 @@ async function serialiseMaterial(row, classMap, subjectMap, userMap, storageRead
   if (row.kind === "link") {
     url = row.link_url || null;
   } else {
-    if (storageReady) {
+    const usesStorage = row.backend ? row.backend === "storage" : storageReady;
+    if (usesStorage && storageReady) {
       try {
         url = await createReadUrl(row.storage_path);
       } catch {
@@ -190,18 +168,23 @@ async function listMaterials(user, filters = {}) {
   };
 }
 
-async function createMaterial(user, input) {
+async function createMaterial(user, input, upload = null) {
   await assertManageableScope(user, input.classIds, input.subjectId);
+  const consumed = upload
+    ? await consumeUploadSession(upload.id, user, input.classIds, input.subjectId)
+    : null;
   const id = await insertDoc("materials", {
     title: input.title,
     description: input.description || "",
     kind: input.kind,
-    file_type: input.fileType,
+    file_type: consumed ? consumed.file_type : input.fileType,
     subject_id: input.subjectId === undefined ? null : input.subjectId,
     class_ids: input.classIds.map(Number),
-    storage_path: input.kind === "file" ? input.storagePath : null,
-    file_name: input.kind === "file" ? input.fileName : null,
-    size_bytes: input.kind === "file" ? input.sizeBytes : null,
+    backend: consumed ? consumed.backend : null,
+    storage_path: consumed ? consumed.storage_path : null,
+    file_name: consumed ? consumed.file_name : null,
+    size_bytes: consumed ? consumed.size_bytes : null,
+    upload_id: consumed ? consumed.id : null,
     link_url: input.kind === "link" ? input.linkUrl : null,
     uploaded_by: user.id,
     views: 0,
@@ -262,6 +245,7 @@ async function trackMaterialView(user, id) {
 }
 
 module.exports = {
+  classIdsOf,
   allowedClassIds,
   manageableClasses,
   assertManageableScope,

@@ -20,6 +20,7 @@ const {
   setSetting
 } = require("./fdb");
 const { ensureSettings } = require("./settings");
+const { migrateTeacherClassAssignments } = require("./class-access");
 
 function subjectKey(name) {
   return encodeURIComponent(String(name || "").trim().toLowerCase().replace(/\s+/g, " "));
@@ -115,79 +116,85 @@ async function subjectMap() {
 }
 
 /**
- * One-time upgrade for existing installs. It creates the subject list from the
- * free-text subjects already on questions, backfills subject ids on questions
- * and quizzes, and gives every teacher the subjects they already own.
+ * One-time upgrades for existing installs. Version 2 created the subject list
+ * and assigned subjects to teachers. Version 3 moved teacher class scope from
+ * "classes where they own a quiz" to an explicit admin-managed assignment.
  */
 async function migrateSchema() {
   await ensureSettings();
-  if (Number(await getSetting("schema_version")) >= 2) return;
+  const version = Number(await getSetting("schema_version"));
+  if (version >= 3) return;
 
-  const generalId = await ensureSubject("General");
-  const [questions, quizzes, users] = await Promise.all([
-    listAll("questions"),
-    listAll("quizzes"),
-    listAll("users")
-  ]);
+  if (version < 2) {
+    const generalId = await ensureSubject("General");
+    const [questions, quizzes, users] = await Promise.all([
+      listAll("questions"),
+      listAll("quizzes"),
+      listAll("users")
+    ]);
 
-  const byName = new Map([["general", generalId]]);
-  const nameOf = row => String(row.subject || "General").trim() || "General";
-  const updates = [];
+    const byName = new Map([["general", generalId]]);
+    const nameOf = row => String(row.subject || "General").trim() || "General";
+    const updates = [];
 
-  for (const question of questions) {
-    const name = nameOf(question);
-    const lower = name.toLowerCase();
-    let id = byName.get(lower);
-    if (!id) {
-      id = await ensureSubject(name);
-      byName.set(lower, id);
+    for (const question of questions) {
+      const name = nameOf(question);
+      const lower = name.toLowerCase();
+      let id = byName.get(lower);
+      if (!id) {
+        id = await ensureSubject(name);
+        byName.set(lower, id);
+      }
+      if (!question.subject_id || !question.subject) {
+        updates.push({ collection: "questions", id: question.id, patch: { subject_id: id, subject: name } });
+      }
     }
-    if (!question.subject_id || !question.subject) {
-      updates.push({ collection: "questions", id: question.id, patch: { subject_id: id, subject: name } });
+
+    for (const quiz of quizzes) {
+      if (quiz.subject_id) continue;
+      const name = nameOf(quiz);
+      const lower = name.toLowerCase();
+      let id = byName.get(lower);
+      if (!id) {
+        id = await ensureSubject(name);
+        byName.set(lower, id);
+      }
+      updates.push({ collection: "quizzes", id: quiz.id, patch: { subject_id: id, subject: name, approved: true } });
     }
-  }
 
-  for (const quiz of quizzes) {
-    if (quiz.subject_id) continue;
-    const name = nameOf(quiz);
-    const lower = name.toLowerCase();
-    let id = byName.get(lower);
-    if (!id) {
-      id = await ensureSubject(name);
-      byName.set(lower, id);
+    const teacherSubjects = new Map();
+    for (const update of updates) {
+      if (update.collection !== "questions") continue;
+      const owner = questions.find(question => Number(question.id) === Number(update.id));
+      if (!owner) continue;
+      const ids = teacherSubjects.get(Number(owner.created_by)) || new Set();
+      ids.add(update.patch.subject_id);
+      teacherSubjects.set(Number(owner.created_by), ids);
     }
-    updates.push({ collection: "quizzes", id: quiz.id, patch: { subject_id: id, subject: name, approved: true } });
-  }
 
-  const teacherSubjects = new Map();
-  for (const update of updates) {
-    if (update.collection !== "questions") continue;
-    const owner = questions.find(question => Number(question.id) === Number(update.id));
-    if (!owner) continue;
-    const ids = teacherSubjects.get(Number(owner.created_by)) || new Set();
-    ids.add(update.patch.subject_id);
-    teacherSubjects.set(Number(owner.created_by), ids);
-  }
-
-  for (const user of users) {
-    if (user.role !== "teacher" || subjectIdsOf(user).length) continue;
-    const ids = teacherSubjects.get(Number(user.id));
-    updates.push({
-      collection: "users",
-      id: user.id,
-      patch: { subject_ids: ids ? [...ids] : [generalId] }
-    });
-  }
-
-  for (let index = 0; index < updates.length; index += 400) {
-    const batch = getDb().batch();
-    for (const update of updates.slice(index, index + 400)) {
-      batch.update(col(update.collection).doc(String(update.id)), update.patch);
+    for (const user of users) {
+      if (user.role !== "teacher" || subjectIdsOf(user).length) continue;
+      const ids = teacherSubjects.get(Number(user.id));
+      updates.push({
+        collection: "users",
+        id: user.id,
+        patch: { subject_ids: ids ? [...ids] : [generalId] }
+      });
     }
-    await batch.commit();
+
+    for (let index = 0; index < updates.length; index += 400) {
+      const batch = getDb().batch();
+      for (const update of updates.slice(index, index + 400)) {
+        batch.update(col(update.collection).doc(String(update.id)), update.patch);
+      }
+      await batch.commit();
+    }
+
+    await setSetting("schema_version", 2);
   }
 
-  await setSetting("schema_version", 2);
+  await migrateTeacherClassAssignments();
+  await setSetting("schema_version", 3);
 }
 
 module.exports = {
