@@ -166,7 +166,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=32";
+const LOGO_MARK = "/logo-mark.svg?v=33";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -3648,12 +3648,16 @@ function heroLevelArt() {
 
   return `
     <div class="hero-level">
-      <div class="quest-ring hero-ring" data-ring-percent="${percent}" role="img" aria-label="Level ${esc(level.number)}, ${percent}% toward level ${esc(level.nextNumber)}">
-        <svg viewBox="0 0 120 120" aria-hidden="true">
-          <circle class="ring-track" cx="60" cy="60" r="52"></circle>
-          <circle class="ring-value" cx="60" cy="60" r="52" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference}"></circle>
-        </svg>
-        <span class="ring-center"><strong>LV ${esc(level.number)}</strong><small data-ring-number>0%</small></span>
+      <div class="hero-photo">
+        <img src="/dashboard-hero.jpg?v=33" alt="" aria-hidden="true">
+        <span class="hero-photo-shade" aria-hidden="true"></span>
+        <div class="quest-ring hero-ring" data-ring-percent="${percent}" role="img" aria-label="Level ${esc(level.number)}, ${percent}% toward level ${esc(level.nextNumber)}">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+            <circle class="ring-value" cx="60" cy="60" r="52" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference}"></circle>
+          </svg>
+          <span class="ring-center"><strong>LV ${esc(level.number)}</strong><small data-ring-number>0%</small></span>
+        </div>
       </div>
       <span class="hero-level-title">${esc(level.title || "Starter")}</span>
       <span class="hero-note">${flames} ${esc(streak.current || 0)} day streak</span>
