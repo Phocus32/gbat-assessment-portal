@@ -767,6 +767,52 @@ h4 {
   font-size: 0.72rem;
 }
 
+.hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.34rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--brand);
+  background: var(--surface);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.hud-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+}
+
+.hud-level {
+  letter-spacing: 0.04em;
+}
+
+.hud-track {
+  display: block;
+  width: 3rem;
+  height: 0.36rem;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.hud-track span {
+  display: block;
+  width: var(--bar-width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), #e7b34a);
+  animation: bar-fill 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hud-streak {
+  color: #c4692a;
+}
+
 .page {
   width: min(100% - 2rem, 1240px);
   margin: 0 auto;
@@ -3092,6 +3138,20 @@ progress::-moz-progress-bar {
   font-weight: 750;
 }
 
+.xp-gain {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid #e7b34a;
+  border-radius: 999px;
+  color: #6d5112;
+  background: var(--accent-soft);
+  font-size: 0.74rem;
+  font-weight: 850;
+  white-space: nowrap;
+  animation: option-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* Fewer expensive effects on small/low-power devices. */
 
 @media (max-width: 620px) {
@@ -3394,6 +3454,105 @@ progress::-moz-progress-bar {
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.podium {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.8rem;
+  margin-bottom: 1.1rem;
+}
+
+.podium-card {
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+  padding: 1rem 0.9rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--surface), var(--brand-soft));
+  text-align: center;
+}
+
+.podium-card.place-1 {
+  padding-top: 1.35rem;
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent-soft), var(--surface));
+  box-shadow: var(--shadow-soft);
+}
+
+.podium-card.is-you {
+  border-color: var(--brand);
+}
+
+.podium-crown {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.podium-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--brand);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.podium-card.place-1 .podium-avatar {
+  background: linear-gradient(145deg, #e7b34a, #b98717);
+}
+
+.podium-card strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.podium-points {
+  color: var(--brand);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.podium-bar {
+  width: 100%;
+  height: 0.4rem;
+  margin-top: 0.2rem;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+.podium-bar span {
+  display: block;
+  width: var(--bar-width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), #e7b34a);
+  animation: bar-fill 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (max-width: 620px) {
+  .hud-track {
+    display: none;
+  }
+
+  .podium {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .podium-card.place-1 {
+    padding-top: 1rem;
+  }
 }
 
 .you-banner {

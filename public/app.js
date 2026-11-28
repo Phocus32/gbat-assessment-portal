@@ -122,6 +122,8 @@ const state = {
   brainTimerMilestone: "",
   questionFilters: { q: "", classId: "all", subjectId: "all" },
   progress: null,
+  lastXpGain: 0,
+  lastSubmissionId: null,
   badgeFilter: "all",
   userSearch: { q: "", classId: "", results: null },
   classSearch: { q: "", results: null }
@@ -166,7 +168,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=33";
+const LOGO_MARK = "/logo-mark.svg?v=34";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -1532,6 +1534,22 @@ async function navTo(view) {
   scrollToTop();
 }
 
+function studentHud() {
+  const progress = state.progress;
+  if (!progress || !progress.level) return "";
+  const level = progress.level;
+  const streak = Number(progress.streak && progress.streak.current) || 0;
+  const percent = Math.max(0, Math.min(100, Number(level.progressPct) || 0));
+
+  return `
+    <button type="button" class="hud-chip" data-action="nav" data-view="rewards"
+      aria-label="Level ${esc(level.number)}, ${esc(level.xp)} XP, ${streak} day streak. Open rewards.">
+      <span class="hud-level">LV ${esc(level.number)}</span>
+      <span class="hud-track" aria-hidden="true"><span style="--bar-width: ${percent}%"></span></span>
+      <span class="hud-streak" aria-hidden="true">🔥 ${streak}</span>
+    </button>`;
+}
+
 function renderShell() {
   const user = state.user;
   if (!state.data) {
@@ -1566,6 +1584,7 @@ function renderShell() {
               <strong>${esc(user.name)}</strong>
               <span>${esc(roleLabel)}${user.className ? ` · ${esc(user.className)}` : ""}</span>
             </div>
+            ${studentHud()}
             <button type="button" class="btn btn-sm btn-primary" data-action="open-ai-drawer">AI Guide</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="open-password">Password</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="logout">Sign out</button>
@@ -3302,6 +3321,36 @@ function leaderboardPeriodLabel(key) {
   return LEADERBOARD_PERIODS.find(item => item.value === key)?.label || "This week";
 }
 
+function leaderboardPodium(rows, isStaff) {
+  const top = (rows || []).filter(row =>
+    Number(row.rank) >= 1 && Number(row.rank) <= 3 && Number(row.points) > 0
+  );
+  if (!top.length) return "";
+
+  const maxPoints = Math.max(...top.map(row => Number(row.points) || 0), 1);
+  const ordered = [2, 1, 3]
+    .map(rank => top.find(row => Number(row.rank) === rank))
+    .filter(Boolean);
+
+  return `
+    <section class="podium" aria-label="Top three students">
+      ${ordered.map((row, index) => {
+        const rank = Number(row.rank);
+        const isYou = !isStaff && Number(row.studentId) === Number(state.user.id);
+        const initial = String(row.name || "?").trim().charAt(0).toUpperCase();
+        const width = Math.round(((Number(row.points) || 0) / maxPoints) * 100);
+        return `
+          <article class="podium-card place-${rank} ${isYou ? "is-you" : ""}" data-reveal style="--reveal-delay: ${index * 90}ms">
+            <span class="podium-crown" aria-hidden="true">${MEDALS[rank - 1]}</span>
+            <span class="podium-avatar" aria-hidden="true">${esc(initial)}</span>
+            <strong>${esc(row.name)}${isYou ? `<span class="lb-you">You</span>` : ""}</strong>
+            <span class="podium-points">${esc(row.points)} pts</span>
+            <span class="podium-bar" aria-hidden="true"><span style="--bar-width: ${width}%"></span></span>
+          </article>`;
+      }).join("")}
+    </section>`;
+}
+
 function renderLeaderboard() {
   const data = state.leaderboard;
   const isStaff = Boolean(state.user && state.user.role !== "student");
@@ -3372,6 +3421,8 @@ function renderLeaderboard() {
             : "Complete an exam to enter the standings. Practice attempts do not count."}</span>
         </div>
       </div>` : ""}
+
+    ${leaderboardPodium(rows, isStaff)}
 
     <section class="panel">
       <div class="panel-head">
@@ -4510,6 +4561,7 @@ async function submitAttempt(auto) {
     if (!confirmed) return;
   }
 
+  const beforeXp = Number(state.progress && state.progress.level && state.progress.level.xp) || 0;
   state.submitting = true;
   renderAttempt();
 
@@ -4522,8 +4574,11 @@ async function submitAttempt(auto) {
     state.attempt = null;
     state.submitting = false;
     state.view = "dashboard";
-    toast(`Attempt submitted: ${result.score}/${result.total} (${result.pct}%).`, "success");
     await loadData();
+    const gainedXp = Math.max(0, (Number(state.progress && state.progress.level && state.progress.level.xp) || 0) - beforeXp);
+    state.lastXpGain = gainedXp;
+    state.lastSubmissionId = result.submissionId;
+    toast(`Attempt submitted: ${result.score}/${result.total} (${result.pct}%).${gainedXp ? ` +${gainedXp} XP earned!` : ""}`, "success");
     render();
     await openSubmission(result.submissionId);
     const passMark = Number((state.data && state.data.settings && state.data.settings.passMark) || 0);
@@ -4596,6 +4651,8 @@ function submissionHtml(submission) {
   const passMark = Number((state.data && state.data.settings && state.data.settings.passMark) || 0);
   const passed = pct >= passMark;
   const cheer = passed ? "Great work — you passed!" : "Keep practising — every attempt helps.";
+  const studentProgress = state.user && state.user.role === "student" ? state.progress : null;
+  const xpGain = Number(state.lastXpGain) || 0;
 
   return `
     <div class="modal-head">
@@ -4616,8 +4673,9 @@ function submissionHtml(submission) {
             <span class="muted">${esc(submission.score)} of ${esc(submission.total)} correct</span>
           </div>
           <p class="result-cheer">${cheer}</p>
+          ${studentProgress && studentProgress.nextBadge ? `<p class="cell-sub">Next badge: <strong>${esc(studentProgress.nextBadge.name)}</strong> · ${esc(studentProgress.nextBadge.progressText)}</p>` : ""}
         </div>
-        <div class="toolbar">${badge(submission.mode, submission.mode === "Exam" ? "warn" : "brand")}</div>
+        <div class="toolbar">${xpGain && Number(state.lastSubmissionId) === Number(submission.id) ? `<span class="xp-gain">+${xpGain} XP</span>` : ""}${badge(submission.mode, submission.mode === "Exam" ? "warn" : "brand")}</div>
       </div>
       <div class="review-list">${questions || emptyState("No questions", "This submission has no stored answers.")}</div>
     </div>
