@@ -66,6 +66,10 @@ async function resetDatabase() {
     "game_daily",
     "game_scores",
     "game_sessions",
+    "word_active",
+    "word_daily",
+    "word_scores",
+    "word_sessions",
     "class_names",
     "classes",
     "complaints",
@@ -2544,6 +2548,169 @@ test("secured portal end-to-end API flow", async t => {
     assert.equal(allGameScores.length, 2);
 
     const finalSession = await studentAgent.get("/api/game/session");
+    assert.equal(finalSession.body.session, null);
+  });
+
+  await t.test("Word Quest is student-only and keeps placements on the server", async () => {
+    const adminView = await adminAgent.get("/api/word-search/session");
+    assert.equal(adminView.status, 403);
+    const teacherView = await teacherAgent.get("/api/word-search/session");
+    assert.equal(teacherView.status, 403);
+
+    const started = await studentAgent.post("/api/word-search/start").set(CSRF).send({});
+    assert.equal(started.status, 200);
+    const session = started.body.session;
+    assert.equal(session.status, "in_progress");
+    assert.equal(session.rows.length, 10);
+    assert.ok(session.rows.every(row => row.length === 10 && /^[A-Z]{10}$/.test(row)));
+    assert.equal(session.words.length, 7);
+    assert.equal(session.total, 7);
+    assert.equal(session.score, 0);
+    assert.equal(started.body.rules.roundSeconds, 90);
+    assert.equal(started.body.rules.hintCost, 30);
+    assert.ok(session.words.every(entry =>
+      entry.word && entry.clue && entry.length === entry.word.length
+    ));
+    assert.ok(session.words.every(entry => !Object.prototype.hasOwnProperty.call(entry, "cells")));
+
+    const stored = await getDocById("word_sessions", session.sessionId);
+    assert.equal(stored.puzzle.words.length, 7);
+    assert.ok(stored.puzzle.words.every(entry =>
+      Array.isArray(entry.cells) && entry.cells.length === entry.word.length
+    ));
+
+    const resumed = await studentAgent.post("/api/word-search/start").set(CSRF).send({});
+    assert.equal(resumed.body.session.sessionId, session.sessionId);
+
+    const current = await studentAgent.get("/api/word-search/session");
+    assert.equal(current.body.session.sessionId, session.sessionId);
+
+    const me = await studentAgent.get("/api/auth/me");
+    const activeLocks = await listWhere("word_active", "student_id", me.body.user.id);
+    assert.equal(activeLocks.length, 1);
+    assert.equal(Number(activeLocks[0].session_id), session.sessionId);
+  });
+
+  await t.test("Word Quest scores finds, penalises misses, charges hints and finishes once", async () => {
+    const before = await studentAgent.get("/api/word-search/session");
+    const session = before.body.session;
+    assert.ok(session, "an active Word Quest round should exist");
+    const examBefore = await studentAgent.get("/api/student/leaderboard");
+    const brainBefore = await studentAgent.get("/api/game/leaderboard");
+
+    const stored = await getDocById("word_sessions", session.sessionId);
+    const first = stored.puzzle.words[0];
+
+    const wrong = await studentAgent.post("/api/word-search/find").set(CSRF).send({
+      sessionId: session.sessionId,
+      word: "ZZZ",
+      cells: [0, 1, 2]
+    });
+    assert.equal(wrong.status, 200);
+    assert.equal(wrong.body.answer.correct, false);
+    assert.equal(wrong.body.answer.penaltySeconds, 3);
+    assert.equal(wrong.body.session.wrong, 1);
+    assert.equal(wrong.body.session.combo, 0);
+    assert.equal(wrong.body.session.score, 0);
+    assert.ok(new Date(wrong.body.session.endsAt) > new Date(session.endsAt));
+
+    const firstFind = await studentAgent.post("/api/word-search/find").set(CSRF).send({
+      sessionId: session.sessionId,
+      word: first.word,
+      cells: first.cells
+    });
+    assert.equal(firstFind.status, 200);
+    assert.equal(firstFind.body.answer.correct, true);
+    assert.equal(firstFind.body.answer.earned, 60);
+    assert.equal(firstFind.body.session.combo, 1);
+    assert.equal(firstFind.body.session.found, 1);
+    assert.equal(firstFind.body.session.score, 60);
+    assert.equal(
+      firstFind.body.session.words.find(entry => entry.word === first.word).found,
+      true
+    );
+    assert.deepEqual(
+      [...firstFind.body.session.foundCells].sort((a, b) => a - b),
+      [...first.cells].sort((a, b) => a - b)
+    );
+
+    const hint = await studentAgent.post("/api/word-search/hint").set(CSRF).send({
+      sessionId: session.sessionId
+    });
+    assert.equal(hint.status, 200);
+    assert.equal(hint.body.hint.cost, 30);
+    assert.equal(hint.body.hint.word, stored.puzzle.words[1].word);
+    assert.equal(hint.body.session.score, 30);
+    assert.equal(hint.body.session.hintsUsed, 1);
+    assert.ok(Number.isInteger(
+      hint.body.session.words.find(entry => entry.word === hint.body.hint.word).hintIndex
+    ));
+
+    const second = stored.puzzle.words[1];
+    const secondFind = await studentAgent.post("/api/word-search/find").set(CSRF).send({
+      sessionId: session.sessionId,
+      word: second.word,
+      cells: second.cells
+    });
+    assert.equal(secondFind.status, 200);
+    assert.equal(secondFind.body.answer.earned, 75);
+    assert.equal(secondFind.body.session.score, 105);
+    assert.equal(secondFind.body.session.bestCombo, 2);
+
+    const stale = await studentAgent.post("/api/word-search/find").set(CSRF).send({
+      sessionId: session.sessionId,
+      word: first.word,
+      cells: first.cells
+    });
+    assert.equal(stale.status, 409);
+
+    const finished = await studentAgent.post("/api/word-search/finish").set(CSRF).send({
+      sessionId: session.sessionId
+    });
+    assert.equal(finished.status, 200);
+    assert.equal(finished.body.summary.baseScore, 105);
+    assert.equal(finished.body.summary.dailyBonus, 100);
+    assert.equal(finished.body.summary.score, 205);
+    assert.equal(finished.body.summary.found, 2);
+    assert.equal(finished.body.summary.hintsUsed, 1);
+
+    const again = await studentAgent.post("/api/word-search/finish").set(CSRF).send({
+      sessionId: session.sessionId
+    });
+    assert.equal(again.body.alreadyFinished, true);
+    assert.equal(again.body.summary.score, 205);
+
+    const board = await studentAgent.get("/api/word-search/leaderboard");
+    assert.equal(board.status, 200);
+    assert.equal(board.body.period.key, "week");
+    assert.ok(board.body.you);
+    assert.equal(board.body.you.points, 205);
+    assert.equal(board.body.you.rounds, 1);
+
+    const examAfter = await studentAgent.get("/api/student/leaderboard");
+    assert.deepEqual(examAfter.body.leaderboard, examBefore.body.leaderboard);
+    const brainAfter = await studentAgent.get("/api/game/leaderboard");
+    assert.deepEqual(brainAfter.body.leaderboard, brainBefore.body.leaderboard);
+
+    const secondStart = await studentAgent.post("/api/word-search/start").set(CSRF).send({});
+    assert.equal(secondStart.status, 200);
+    const nextStored = await getDocById("word_sessions", secondStart.body.session.sessionId);
+    const nextFind = await studentAgent.post("/api/word-search/find").set(CSRF).send({
+      sessionId: secondStart.body.session.sessionId,
+      word: nextStored.puzzle.words[0].word,
+      cells: nextStored.puzzle.words[0].cells
+    });
+    assert.equal(nextFind.status, 200);
+    const secondFinish = await studentAgent.post("/api/word-search/finish").set(CSRF).send({
+      sessionId: secondStart.body.session.sessionId
+    });
+    assert.equal(secondFinish.body.summary.dailyBonus, 0);
+
+    const me = await studentAgent.get("/api/auth/me");
+    const allScores = await listWhere("word_scores", "student_id", me.body.user.id);
+    assert.equal(allScores.length, 2);
+
+    const finalSession = await studentAgent.get("/api/word-search/session");
     assert.equal(finalSession.body.session, null);
   });
 

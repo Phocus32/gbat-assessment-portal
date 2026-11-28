@@ -42,6 +42,7 @@ const NAV_ITEMS = {
   student: [
     ["dashboard", "Dashboard"],
     ["brain", "Brain Sprint"],
+    ["word", "Word Quest"],
     ["leaderboard", "Leaderboard"],
     ["materials", "Materials"],
     ["rewards", "Rewards"],
@@ -120,6 +121,17 @@ const state = {
   brainTimer: null,
   brainEndsAt: null,
   brainTimerMilestone: "",
+  wordSession: null,
+  wordRules: null,
+  wordLeaderboard: null,
+  wordPeriod: "week",
+  wordBusy: false,
+  wordFinishing: false,
+  wordSelection: [],
+  wordTimer: null,
+  wordEndsAt: null,
+  wordTimerMilestone: "",
+  wordSummary: null,
   questionFilters: { q: "", classId: "all", subjectId: "all" },
   progress: null,
   lastXpGain: 0,
@@ -168,7 +180,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=34";
+const LOGO_MARK = "/logo-mark.svg?v=35";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -1529,6 +1541,15 @@ async function navTo(view) {
   } else {
     stopBrainTimer();
   }
+  if (view === "word") {
+    try {
+      await Promise.all([loadWordSession(), loadWordLeaderboard()]);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  } else {
+    stopWordTimer();
+  }
   render();
   focusMainContent();
   scrollToTop();
@@ -1608,6 +1629,7 @@ function renderShell() {
   }
   updateScrollUi();
   syncBrainTimer();
+  syncWordTimer();
   restoreFocus(snapshot);
 }
 
@@ -3004,6 +3026,7 @@ async function loadDiscussion() {
 
 function renderStudentView() {
   if (state.view === "brain") return renderBrainSprint();
+  if (state.view === "word") return renderWordQuest();
   if (state.view === "leaderboard") return renderLeaderboard();
   if (state.view === "materials") return renderMaterials();
   if (state.view === "rewards") return renderStudentRewards();
@@ -3806,6 +3829,7 @@ function studentHero() {
         <div class="hero-actions">
           <button type="button" class="btn btn-primary" data-action="scroll-quizzes">Find a quiz</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="brain">Play Brain Sprint</button>
+          <button type="button" class="btn btn-ghost" data-action="nav" data-view="word">Play Word Quest</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="leaderboard">Class leaderboard</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="rewards">My rewards</button>
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
@@ -3835,6 +3859,15 @@ function renderStudentDashboard() {
         <p>Sixty seconds of number targets, sequences and pattern grids. Practice only, with its own school leaderboard — exam results stay untouched.</p>
       </div>
       <button type="button" class="btn btn-primary" data-action="nav" data-view="brain">Play now</button>
+    </section>
+    <section class="brain-promo word-promo">
+      <span class="brain-promo-icon" aria-hidden="true">🔎</span>
+      <div class="brain-promo-copy">
+        <span class="eyebrow">Word Quest</span>
+        <h2>Find the hidden words, build your combo</h2>
+        <p>A ten-by-ten puzzle with seven words, score multipliers, paid hints and a separate school board. Every find is a little win.</p>
+      </div>
+      <button type="button" class="btn btn-primary" data-action="nav" data-view="word">Start quest</button>
     </section>
     <div class="grid-2">
       <section class="panel">
@@ -4268,6 +4301,475 @@ function leaveBrainRound() {
   scrollToTop();
 }
 
+/* Word Quest */
+
+const WORD_PERIODS = [
+  ["week", "This week"],
+  ["last-week", "Last week"],
+  ["all", "All time"]
+];
+
+async function loadWordSession() {
+  const result = await api("/word-search/session");
+  state.wordRules = result.rules;
+  state.wordSession = result.session;
+  state.wordEndsAt = result.session ? new Date(result.session.endsAt).getTime() : null;
+  state.wordSelection = [];
+  if (!result.session) state.wordSummary = null;
+  return result;
+}
+
+async function loadWordLeaderboard() {
+  const period = encodeURIComponent(state.wordPeriod || "week");
+  state.wordLeaderboard = await api(`/word-search/leaderboard?period=${period}`);
+  return state.wordLeaderboard;
+}
+
+function stopWordTimer() {
+  if (state.wordTimer) clearInterval(state.wordTimer);
+  state.wordTimer = null;
+}
+
+function updateWordTimerDisplay() {
+  const timerEl = document.getElementById("word-timer");
+  if (!timerEl) return;
+  const total = Number(state.wordRules && state.wordRules.roundSeconds) || 90;
+  const seconds = state.wordEndsAt
+    ? Math.max(0, Math.ceil((state.wordEndsAt - Date.now()) / 1000))
+    : 0;
+  timerEl.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+
+  const progressEl = document.getElementById("word-progress");
+  if (progressEl) {
+    progressEl.max = String(total);
+    progressEl.value = String(Math.min(total, seconds));
+  }
+
+  const liveEl = document.getElementById("word-timer-live");
+  if (liveEl && seconds <= 10 && state.wordTimerMilestone !== "ten") {
+    state.wordTimerMilestone = "ten";
+    liveEl.textContent = "10 seconds left";
+  }
+}
+
+function wordTick() {
+  if (!state.wordSession || state.wordFinishing) return;
+  updateWordTimerDisplay();
+  const seconds = state.wordEndsAt
+    ? Math.max(0, Math.ceil((state.wordEndsAt - Date.now()) / 1000))
+    : 0;
+  if (seconds <= 0) {
+    stopWordTimer();
+    finishWordRound(true).catch(error => toast(error.message, "error"));
+  }
+}
+
+function syncWordTimer() {
+  const active = state.screen === "app"
+    && state.view === "word"
+    && state.wordSession
+    && state.wordSession.status === "in_progress";
+  if (!active) {
+    stopWordTimer();
+    return;
+  }
+  if (!state.wordTimer) state.wordTimer = setInterval(wordTick, 250);
+  updateWordTimerDisplay();
+}
+
+function wordLetterAt(rows, index) {
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const size = Number(rows[0].length) || rows.length;
+  const row = Math.floor(Number(index) / size);
+  const col = Number(index) % size;
+  return (rows[row] || "")[col] || "";
+}
+
+function wordCellLabel(session, index) {
+  const size = Number(session.size) || 10;
+  const row = Math.floor(Number(index) / size) + 1;
+  const col = (Number(index) % size) + 1;
+  const letter = wordLetterAt(session.rows, index);
+  const selected = state.wordSelection.includes(Number(index));
+  return `${letter}, row ${row}, column ${col}${selected ? ", selected" : ""}`;
+}
+
+function wordMultiplierLabel() {
+  const rules = state.wordRules || {};
+  const combo = Number(state.wordSession && state.wordSession.combo) || 0;
+  const step = Number(rules.comboStep) || 0.25;
+  const max = Number(rules.maxMultiplier) || 2.5;
+  const value = Math.min(max, 1 + combo * step);
+  return `×${String(value).replace(/\.00$/, "").replace(/0$/, "")}`;
+}
+
+function wordRulesChips() {
+  const rules = state.wordRules;
+  if (!rules) return "";
+  return `
+    <div class="word-rules">
+      <span class="pill">${esc(rules.gridSize)}×${esc(rules.gridSize)} grid</span>
+      <span class="pill">${esc(rules.wordCount)} hidden words</span>
+      <span class="pill">${esc(rules.roundSeconds)} second round</span>
+      <span class="pill">${esc(rules.basePoints)} pts per find</span>
+      <span class="pill">×${esc(rules.maxMultiplier)} max combo</span>
+      <span class="pill warn">−${esc(rules.hintCost)} pts per hint</span>
+    </div>`;
+}
+
+function wordBoardRows(limit = 5) {
+  const rows = (state.wordLeaderboard && state.wordLeaderboard.leaderboard) || [];
+  const shown = rows.slice(0, limit);
+  if (!shown.length) return emptyState("No scores yet", "Complete a quest to start the school board.");
+  return `
+    <ol class="brain-board-list">
+      ${shown.map(row => `
+        <li class="${Number(row.studentId) === Number(state.user.id) ? "is-you" : ""}">
+          <span class="brain-board-rank">${esc(row.rank)}</span>
+          <span class="brain-board-name">${esc(row.name)}${Number(row.studentId) === Number(state.user.id) ? '<small>You</small>' : ""}</span>
+          <strong>${esc(row.points)}</strong>
+        </li>`).join("")}
+    </ol>`;
+}
+
+function wordLeaderboardPanel() {
+  const period = state.wordLeaderboard?.period || { key: state.wordPeriod, label: "This week" };
+  const you = state.wordLeaderboard?.you;
+  return `
+    <section class="panel mt-16">
+      <div class="panel-head">
+        <h2 class="panel-title">Word Quest · school board</h2>
+        <div class="toolbar">
+          <label class="lb-picker">
+            <span class="sr-only">Word Quest leaderboard period</span>
+            <select data-word-period>
+              ${WORD_PERIODS.map(([value, label]) => `<option value="${value}" ${value === period.key ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <button type="button" class="btn btn-sm" data-action="refresh-word-board">Refresh</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${you && you.rank ? `<p class="small mb-1">You are <strong>#${esc(you.rank)}</strong> with ${esc(you.points)} points across ${esc(you.rounds)} quest${you.rounds === 1 ? "" : "s"}.</p>` : ""}
+        ${wordBoardRows()}
+        <p class="form-note mt-1">${esc(period.label)} · ${esc(state.wordLeaderboard?.roundsCount || 0)} completed quests counted. Exam scores never appear here.</p>
+      </div>
+    </section>`;
+}
+
+function wordGridHtml(session) {
+  const foundCells = new Set(session.foundCells || []);
+  const hintedCells = new Map((session.words || [])
+    .filter(entry => Number.isInteger(entry.hintIndex))
+    .map(entry => [Number(entry.hintIndex), entry.word]));
+
+  return `
+    <div class="word-grid" aria-label="Word search puzzle">
+      ${(session.rows || []).join("").split("").map((letter, index) => {
+        const classes = [
+          "word-cell",
+          foundCells.has(index) ? "is-found" : "",
+          state.wordSelection.includes(index) ? "is-selected" : "",
+          hintedCells.has(index) ? "is-hint" : ""
+        ].filter(Boolean).join(" ");
+        return `<button type="button" class="${classes}" data-action="word-cell" data-index="${index}"
+          aria-label="${esc(wordCellLabel(session, index))}"
+          ${state.wordBusy || state.wordFinishing ? "disabled" : ""}>${esc(letter)}</button>`;
+      }).join("")}
+    </div>`;
+}
+
+function wordSelectionPreview(session) {
+  const letters = state.wordSelection.map(index => wordLetterAt(session.rows, index)).join("");
+  return `
+    <div class="word-selection" role="status" aria-live="polite">
+      <span>Your selection</span>
+      <strong id="word-selection-text">${letters ? esc(letters) : "—"}</strong>
+    </div>`;
+}
+
+function wordTargetsHtml(session) {
+  const size = Number(session.size) || 10;
+  return `
+    <ul class="word-target-list">
+      ${(session.words || []).map(entry => {
+        const hint = Number.isInteger(entry.hintIndex)
+          ? `Hint: row ${Math.floor(entry.hintIndex / size) + 1}, column ${(entry.hintIndex % size) + 1}`
+          : "";
+        return `
+          <li class="${entry.found ? "is-found" : ""}">
+            <span class="word-target-word">${esc(entry.word)}</span>
+            <small>${esc(entry.clue)}${hint ? ` · ${esc(hint)}` : ""}</small>
+          </li>`;
+      }).join("")}
+    </ul>`;
+}
+
+function updateWordSelectionUi() {
+  const session = state.wordSession;
+  if (!session) return;
+  const letters = state.wordSelection.map(index => wordLetterAt(session.rows, index)).join("");
+  const text = document.getElementById("word-selection-text");
+  if (text) text.textContent = letters || "—";
+
+  appEl.querySelectorAll('[data-action="word-cell"]').forEach(cell => {
+    const index = Number(cell.dataset.index);
+    const selected = state.wordSelection.includes(index);
+    cell.classList.toggle("is-selected", selected);
+    cell.setAttribute("aria-label", wordCellLabel(session, index));
+  });
+
+  const check = appEl.querySelector('[data-action="word-check"]');
+  if (check) check.disabled = state.wordSelection.length < 2 || state.wordBusy || state.wordFinishing;
+}
+
+function toggleWordCell(index) {
+  const session = state.wordSession;
+  if (!session || state.wordBusy || state.wordFinishing) return;
+  const position = state.wordSelection.indexOf(Number(index));
+  if (position >= 0) state.wordSelection.splice(position, 1);
+  else state.wordSelection.push(Number(index));
+  updateWordSelectionUi();
+}
+
+function clearWordSelection() {
+  if (!state.wordSession || state.wordBusy || state.wordFinishing) return;
+  state.wordSelection = [];
+  updateWordSelectionUi();
+}
+
+function renderWordQuest() {
+  if (state.wordSummary) {
+    const summary = state.wordSummary;
+    const perfect = Number(summary.found) === Number(summary.totalWords);
+    return `
+      ${pageHead("Practice game", "Quest complete", "Word Quest points stay on their own school board.",
+        `<button type="button" class="btn" data-action="nav" data-view="dashboard">Back to dashboard</button>`)}
+      <section class="panel word-summary">
+        <div class="word-summary-mark" aria-hidden="true">${perfect ? "🏆" : "🔎"}</div>
+        <h2>${perfect ? "Perfect sweep!" : "Nice hunting!"}</h2>
+        <p>You found ${esc(summary.found)} of ${esc(summary.totalWords)} hidden words.</p>
+        <div class="brain-summary-stats">
+          <span>Score <strong>${esc(summary.score)}</strong></span>
+          <span>Base <strong>${esc(summary.baseScore)}</strong></span>
+          <span>Daily bonus <strong>+${esc(summary.dailyBonus)}</strong></span>
+          <span>Best combo <strong>×${esc(summary.bestCombo ? (1 + summary.bestCombo * 0.25).toFixed(2).replace(/\.00$/, "") : 1)}</strong></span>
+          <span>Hints <strong>${esc(summary.hintsUsed)}</strong></span>
+          <span>Misses <strong>${esc(summary.wrong)}</strong></span>
+        </div>
+        <div class="toolbar">
+          <button type="button" class="btn btn-primary" data-action="word-start">Play again</button>
+          <button type="button" class="btn" data-action="refresh-word-board">Refresh school board</button>
+        </div>
+      </section>
+      ${wordLeaderboardPanel()}`;
+  }
+
+  const session = state.wordSession;
+  if (!session) {
+    return `
+      ${pageHead("Practice game", "Word Quest", "A hidden-word puzzle with combos, hints and its own school leaderboard.",
+        `<button type="button" class="btn" data-action="nav" data-view="dashboard">Back to dashboard</button>`)}
+      <section class="panel word-intro">
+        <div class="word-intro-copy">
+          <span class="eyebrow">Puzzle lab</span>
+          <h2>Spot the words. Stack the combo.</h2>
+          <p>Seven words are hiding in the grid. Tap their letters in order and check each find. Correct finds grow your multiplier; a miss resets it and adds three seconds. Hints reveal one cell for a small score cost.</p>
+          ${wordRulesChips()}
+          <div class="toolbar mt-16">
+            <button type="button" class="btn btn-primary btn-lg" data-action="word-start" ${state.wordBusy ? "disabled" : ""}>${state.wordBusy ? "Preparing…" : "Start a quest"}</button>
+            <button type="button" class="btn" data-action="nav" data-view="brain">Try Brain Sprint</button>
+          </div>
+        </div>
+        <div class="word-intro-art" aria-hidden="true">
+          <span>W</span><span>O</span><span>R</span><span>D</span>
+          <em>find me</em>
+        </div>
+      </section>
+      ${wordLeaderboardPanel()}`;
+  }
+
+  const hintCost = Number(state.wordRules && state.wordRules.hintCost) || 30;
+  return `
+    ${pageHead("Practice game", "Word Quest", "Find every hidden word before the timer runs out.")}
+    <div class="word-shell">
+      <header class="word-top">
+        <div class="word-top-inner">
+          <div class="word-brand">
+            <span class="word-brand-mark" aria-hidden="true">🔎</span>
+            <div><strong>Word Quest</strong><span>Find · combine · score</span></div>
+          </div>
+          <div class="word-timer" role="timer" aria-label="Time remaining">
+            <strong id="word-timer" aria-hidden="true">--:--</strong>
+            <progress id="word-progress" max="90" value="90"></progress>
+            <span class="sr-only" id="word-timer-live" role="status" aria-live="polite"></span>
+          </div>
+          <div class="word-top-actions">
+            <button type="button" class="btn btn-sm" data-action="word-finish" ${state.wordBusy || state.wordFinishing ? "disabled" : ""}>${state.wordFinishing ? "Saving…" : "Finish round"}</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="word-leave" ${state.wordFinishing ? "disabled" : ""}>Leave</button>
+          </div>
+        </div>
+      </header>
+      <main class="page word-main" id="main-content" tabindex="-1">
+        <div class="word-stats">
+          <span>Score <strong>${esc(session.score)}</strong></span>
+          <span>Words <strong>${esc(session.found)}/${esc(session.total)}</strong></span>
+          <span>Combo <strong>${wordMultiplierLabel()}</strong></span>
+          <span>Misses <strong>${esc(session.wrong)}</strong></span>
+        </div>
+        <div class="word-play-grid">
+          <section class="panel word-board-panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Puzzle grid</h2>
+                <span class="cell-sub">Tap letters in order, then check your word. Tap again to undo.</span>
+              </div>
+              <span class="pill">${esc(session.size)}×${esc(session.size)}</span>
+            </div>
+            <div class="panel-body">
+              ${wordGridHtml(session)}
+              ${wordSelectionPreview(session)}
+              <div class="toolbar">
+                <button type="button" class="btn btn-primary" data-action="word-check" ${state.wordSelection.length < 2 || state.wordBusy || state.wordFinishing ? "disabled" : ""}>${state.wordBusy ? "Checking…" : "Check word"}</button>
+                <button type="button" class="btn" data-action="word-clear" ${state.wordBusy || state.wordFinishing || !state.wordSelection.length ? "disabled" : ""}>Clear</button>
+                <button type="button" class="btn btn-ghost" data-action="word-hint" ${state.wordBusy || state.wordFinishing ? "disabled" : ""}>Hint · −${hintCost}</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel word-targets">
+            <div class="panel-head">
+              <h2 class="panel-title">Words to find</h2>
+              <span class="pill">${esc(session.found)}/${esc(session.total)}</span>
+            </div>
+            <div class="panel-body">${wordTargetsHtml(session)}</div>
+          </section>
+        </div>
+      </main>
+    </div>`;
+}
+
+async function startWordRound() {
+  if (state.wordBusy || state.wordFinishing) return;
+  state.wordBusy = true;
+  render();
+  try {
+    const result = await api("/word-search/start", { method: "POST", body: {} });
+    state.wordRules = result.rules;
+    state.wordSession = result.session;
+    state.wordEndsAt = new Date(result.session.endsAt).getTime();
+    state.wordSelection = [];
+    state.wordSummary = null;
+    state.wordTimerMilestone = "";
+    toast(result.session.score > 0 ? "Quest resumed — keep going!" : "Quest started. Happy hunting!", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.wordBusy = false;
+    render();
+    focusMainContent();
+  }
+}
+
+async function findSelectedWord() {
+  const session = state.wordSession;
+  if (!session || state.wordBusy || state.wordFinishing || state.wordSelection.length < 2) return;
+  const cells = [...state.wordSelection];
+  const word = cells.map(index => wordLetterAt(session.rows, index)).join("");
+  state.wordBusy = true;
+  render();
+
+  try {
+    const result = await api("/word-search/find", {
+      method: "POST",
+      body: { sessionId: session.sessionId, word, cells }
+    });
+    state.wordSession = result.session;
+    state.wordEndsAt = new Date(result.session.endsAt).getTime();
+    state.wordSelection = [];
+    state.wordTimerMilestone = "";
+    if (result.answer.correct) {
+      toast(`Found ${word} · +${result.answer.earned} pts · ×${String(result.answer.multiplier).replace(/\.00$/, "")} combo`, "success");
+      if (result.session.found >= result.session.total) celebrate();
+    } else {
+      toast("No match there — combo reset and +3 seconds.", "warn");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.wordBusy = false;
+    render();
+    focusMainContent();
+  }
+}
+
+async function useWordHint() {
+  const session = state.wordSession;
+  if (!session || state.wordBusy || state.wordFinishing) return;
+  state.wordBusy = true;
+  render();
+
+  try {
+    const result = await api("/word-search/hint", {
+      method: "POST",
+      body: { sessionId: session.sessionId }
+    });
+    state.wordSession = result.session;
+    state.wordEndsAt = new Date(result.session.endsAt).getTime();
+    toast(`Hint revealed for ${result.hint.word} · −${result.hint.cost} pts`, "success");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.wordBusy = false;
+    render();
+    focusMainContent();
+  }
+}
+
+async function finishWordRound(auto = false) {
+  const session = state.wordSession;
+  if (!session || state.wordFinishing) return;
+  if (!auto && !session.found && !window.confirm("Finish without finding any words?")) return;
+
+  state.wordFinishing = true;
+  stopWordTimer();
+  render();
+
+  try {
+    const result = await api("/word-search/finish", {
+      method: "POST",
+      body: { sessionId: session.sessionId }
+    });
+    state.wordSummary = result.summary;
+    state.wordSession = null;
+    state.wordEndsAt = null;
+    state.wordSelection = [];
+    await loadWordLeaderboard();
+    if (result.summary.found > 0) celebrate();
+    toast(result.alreadyFinished ? "Quest already saved." : `Quest saved · ${result.summary.score} points`, "success");
+  } catch (error) {
+    toast(error.message, "error");
+    try {
+      await loadWordSession();
+    } catch {
+      state.wordSession = null;
+    }
+  } finally {
+    state.wordFinishing = false;
+    render();
+    focusMainContent();
+  }
+}
+
+function leaveWordRound() {
+  stopWordTimer();
+  state.wordSession = null;
+  state.wordEndsAt = null;
+  state.wordSelection = [];
+  state.wordSummary = null;
+  render();
+  focusMainContent();
+}
+
 function renderStudentResults() {
   const d = state.data;
   return `
@@ -4304,6 +4806,7 @@ function renderStudentResults() {
 function beginAttempt(attempt) {
   clearTimer();
   stopBrainTimer();
+  stopWordTimer();
   timerMilestone = "";
   state.attempt = attempt;
   state.currentIndex = 0;
@@ -5322,6 +5825,36 @@ async function runAction(button) {
     case "refresh-brain-board":
       try {
         await loadBrainLeaderboard();
+        render();
+        focusMainContent();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
+    case "word-start":
+      await startWordRound();
+      return;
+    case "word-cell":
+      toggleWordCell(Number(button.dataset.index));
+      return;
+    case "word-check":
+      await findSelectedWord();
+      return;
+    case "word-clear":
+      clearWordSelection();
+      return;
+    case "word-hint":
+      await useWordHint();
+      return;
+    case "word-finish":
+      await finishWordRound(false);
+      return;
+    case "word-leave":
+      leaveWordRound();
+      return;
+    case "refresh-word-board":
+      try {
+        await loadWordLeaderboard();
         render();
         focusMainContent();
       } catch (error) {
@@ -6546,6 +7079,19 @@ document.addEventListener("change", async event => {
       await loadBrainLeaderboard();
       render();
       focusAfterRender("[data-brain-period]");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
+  const wordPeriodSelect = event.target.closest("[data-word-period]");
+  if (wordPeriodSelect) {
+    state.wordPeriod = wordPeriodSelect.value;
+    try {
+      await loadWordLeaderboard();
+      render();
+      focusAfterRender("[data-word-period]");
     } catch (error) {
       toast(error.message, "error");
     }

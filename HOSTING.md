@@ -158,6 +158,8 @@ Firestore collections:
 | `submissions` | Graded results with answers embedded |
 | `discussion_threads`, `discussion_replies`, `discussion_reports` | Class-only discussion, replies and staff reports |
 | `ai_guide_logs` | AI Guide prompts, replies and safety decisions for staff review |
+| `game_sessions`, `game_scores`, `game_active`, `game_daily` | Brain Sprint practice rounds and school board |
+| `word_sessions`, `word_scores`, `word_active`, `word_daily` | Word Quest practice rounds and school board |
 | `announcements`, `activity_logs`, `settings` | Supporting data |
 | `usernames`, `class_names`, `meta` | Uniqueness locks and ID counters |
 

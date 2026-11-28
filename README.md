@@ -63,6 +63,21 @@ npm run emulators
   `game_daily`. They appear only on the school-wide Brain Sprint leaderboard and
   never enter exam submissions, XP, badges or the class leaderboard.
 
+## Word Quest
+
+- Students can play **Word Quest** at any time as a practice puzzle. The server
+  generates a 10×10 board with seven hidden words and keeps the placements
+  private; the browser only receives the letters, clues and target words.
+- Each round lasts 90 seconds. A correct find earns 60 points × the current combo
+  multiplier (starts at 1×, rises by 0.25× per find, capped at 2.5×). A miss
+  resets the combo and adds 3 seconds. A hint reveals one cell for up to 30
+  points.
+- The first completed round with a find each UTC day adds a 100-point bonus.
+  Finishing twice cannot award the bonus twice.
+- Word Quest data lives in `word_sessions`, `word_scores`, `word_active` and
+  `word_daily`. It appears only on the school-wide Word Quest leaderboard and
+  never enters exams, XP, badges, class standings or Brain Sprint scores.
+
 ## Class discussion and AI guide
 
 - Students can start class-only threads, reply and report posts. Teachers see

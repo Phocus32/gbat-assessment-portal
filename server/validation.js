@@ -213,6 +213,21 @@ const gameFinishSchema = z.object({
   sessionId: idSchema
 });
 
+const wordFindSchema = z.object({
+  sessionId: idSchema,
+  word: z.string().trim().min(2, "Select at least two letters.").max(20)
+    .regex(/^[a-zA-Z]+$/, "Letters only."),
+  cells: z.array(z.coerce.number().int().min(0).max(99)).min(2).max(10)
+});
+
+const wordHintSchema = z.object({
+  sessionId: idSchema
+});
+
+const wordFinishSchema = z.object({
+  sessionId: idSchema
+});
+
 const discussionThreadCreateSchema = z.object({
   title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long."),
   body: z.string().trim().min(5, "Write at least 5 characters.").max(4000, "Message is too long.")
@@ -374,6 +389,9 @@ module.exports = {
   leaderboardPeriodSchema,
   gameAnswerSchema,
   gameFinishSchema,
+  wordFindSchema,
+  wordHintSchema,
+  wordFinishSchema,
   discussionThreadCreateSchema,
   discussionReplyCreateSchema,
   discussionReportCreateSchema,

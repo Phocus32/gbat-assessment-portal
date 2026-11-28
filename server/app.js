@@ -18,6 +18,7 @@ const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const gameRouter = require("./routes/game");
+const wordSearchRouter = require("./routes/word-search");
 const discussionRouter = require("./routes/discussion");
 const aiGuideRouter = require("./routes/ai-guide");
 const config = require("./config");
@@ -121,6 +122,9 @@ app.use("/api/complaints", authenticate, requirePasswordChanged, complaintsRoute
 // Brain Sprint is practice-only and student-only. Its sessions and scores are
 // stored separately from attempts, submissions and the exam leaderboard.
 app.use("/api/game", authenticate, requirePasswordChanged, requireRole("student"), gameRouter);
+// Word Quest is practice-only and student-only. Sessions, scores and its board
+// are stored separately from exams, Brain Sprint and the class leaderboard.
+app.use("/api/word-search", authenticate, requirePasswordChanged, requireRole("student"), wordSearchRouter);
 // Class discussion and the AI guide accept every authenticated role. Class and
 // staff-only checks are enforced inside each router.
 app.use("/api/discussion", authenticate, requirePasswordChanged, discussionRouter);
