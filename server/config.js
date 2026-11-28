@@ -92,6 +92,11 @@ const config = {
   secureCookies: process.env.COOKIE_SECURE === "true" || env === "production",
   bcryptRounds: Number(process.env.BCRYPT_ROUNDS || 12),
   apiRateMax: Number(process.env.API_RATE_MAX || 5000),
+  // Gemini guide. GOOGLE_API_KEY is the documented variable; GEMINI_API_KEY is
+  // accepted as a fallback because the official SDK uses that name.
+  googleApiKey: process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "",
+  aiModel: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+  aiMaxOutputTokens: Math.max(200, Number(process.env.AI_MAX_OUTPUT_TOKENS || 600)),
   loginMaxAttempts: Number(process.env.LOGIN_MAX_ATTEMPTS || 5),
   loginLockMinutes: Number(process.env.LOGIN_LOCK_MINUTES || 15),
   loginRateMax: Number(process.env.LOGIN_RATE_MAX || 100),

@@ -38,6 +38,9 @@ Keep the downloaded file safe. You will copy three values from it into Vercel.
 | `JWT_SECRET` | A random string of at least 32 characters (see below) |
 | `SEED_DEMO` | `false` recommended for a real deployment |
 | `FIREBASE_STORAGE_BUCKET` | Optional; the app detects either `<project-id>.appspot.com` or `<project-id>.firebasestorage.app` |
+| `GOOGLE_API_KEY` | Gemini API key for the AI guide; create one in Google AI Studio. The guide shows a safe fallback message until this is set. |
+| `GEMINI_MODEL` | Optional; defaults to `gemini-3.8-flash` |
+| `AI_MAX_OUTPUT_TOKENS` | Optional; defaults to `600` |
 
 Generate `JWT_SECRET` locally:
 
@@ -92,6 +95,15 @@ The account in the Firebase credentials needs permission to update bucket
 metadata (the **Storage Admin** role works). If you prefer the Google Cloud
 CLI, apply the equivalent CORS JSON with `gcloud storage buckets update`.
 
+### AI guide (optional)
+
+Create a key at <https://aistudio.google.com/apikey>, add it to Vercel as
+`GOOGLE_API_KEY`, and redeploy. The server calls Gemini with that key; the
+browser never receives it. Until the key is present, the guide replies with a
+short "not configured yet" message instead of failing. Requests for exam
+answers and exact practice answers are rejected before any Gemini call, and
+each turn is written to `ai_guide_logs` for staff review.
+
 4. Click **Deploy**. The first request runs the one-time bootstrap.
 
 ---
@@ -144,6 +156,8 @@ Firestore collections:
 | `quizzes` | Quiz metadata; questions are in `quizzes/{id}/items/{position}` |
 | `attempts` | Exam/practice attempts; answers are in `attempts/{id}/answers/{position}` |
 | `submissions` | Graded results with answers embedded |
+| `discussion_threads`, `discussion_replies`, `discussion_reports` | Class-only discussion, replies and staff reports |
+| `ai_guide_logs` | AI Guide prompts, replies and safety decisions for staff review |
 | `announcements`, `activity_logs`, `settings` | Supporting data |
 | `usernames`, `class_names`, `meta` | Uniqueness locks and ID counters |
 

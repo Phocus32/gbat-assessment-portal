@@ -63,6 +63,21 @@ npm run emulators
   `game_daily`. They appear only on the school-wide Brain Sprint leaderboard and
   never enter exam submissions, XP, badges or the class leaderboard.
 
+## Class discussion and AI guide
+
+- Students can start class-only threads, reply and report posts. Teachers see
+  only their assigned classes; admins see every class. Posts are checked by basic
+  profanity/spam filters, and staff can hide reported content.
+- Discussion data lives in `discussion_threads`, `discussion_replies` and
+  `discussion_reports`. It never touches attempts, submissions, XP or results.
+- The **AI Guide** drawer is available across the portal. It uses Gemini
+  server-side with `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) and defaults to
+  `gemini-3.8-flash`; set `GEMINI_MODEL` to override the model.
+- The guide never receives quiz questions, options, solutions or Brain Sprint
+  puzzle state. Requests for exam answers, exact practice answers, secrets or
+  prompt injection are blocked before Gemini is called, and every turn is
+  logged in `ai_guide_logs` for staff review.
+
 ## Host it online
 
 See **[HOSTING.md](HOSTING.md)** for the full Vercel + Firebase walkthrough.

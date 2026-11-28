@@ -18,6 +18,8 @@ const materialsRouter = require("./routes/materials");
 const submissionsRouter = require("./routes/submissions");
 const complaintsRouter = require("./routes/complaints");
 const gameRouter = require("./routes/game");
+const discussionRouter = require("./routes/discussion");
+const aiGuideRouter = require("./routes/ai-guide");
 const config = require("./config");
 const { authenticate, requireAnyRole, requireRole, requirePasswordChanged } = require("./security");
 
@@ -119,6 +121,10 @@ app.use("/api/complaints", authenticate, requirePasswordChanged, complaintsRoute
 // Brain Sprint is practice-only and student-only. Its sessions and scores are
 // stored separately from attempts, submissions and the exam leaderboard.
 app.use("/api/game", authenticate, requirePasswordChanged, requireRole("student"), gameRouter);
+// Class discussion and the AI guide accept every authenticated role. Class and
+// staff-only checks are enforced inside each router.
+app.use("/api/discussion", authenticate, requirePasswordChanged, discussionRouter);
+app.use("/api/ai-guide", authenticate, requirePasswordChanged, aiGuideRouter);
 
 app.get(["/", "/index.html"], (req, res) => {
   res.type("html")

@@ -4,6 +4,7 @@ const appEl = document.getElementById("app");
 const modalEl = document.getElementById("modal");
 const modalContent = document.getElementById("modal-content");
 const toastRegion = document.getElementById("toasts");
+const aiDrawerEl = document.getElementById("ai-drawer");
 
 const ROLE_LABEL = {
   admin: "Administrator",
@@ -22,6 +23,7 @@ const NAV_ITEMS = {
     ["quizzes", "Quizzes"],
     ["activity", "Activity"],
     ["complaints", "Complaints"],
+    ["discussion", "Discussion"],
     ["settings", "Settings"]
   ],
   teacher: [
@@ -34,7 +36,8 @@ const NAV_ITEMS = {
     ["results", "Results"],
     ["submissions", "Submissions"],
     ["announcements", "Announcements"],
-    ["complaints", "Complaints"]
+    ["complaints", "Complaints"],
+    ["discussion", "Discussion"]
   ],
   student: [
     ["dashboard", "Dashboard"],
@@ -43,7 +46,8 @@ const NAV_ITEMS = {
     ["materials", "Materials"],
     ["rewards", "Rewards"],
     ["results", "My results"],
-    ["complaints", "Complaints"]
+    ["complaints", "Complaints"],
+    ["discussion", "Discussion"]
   ]
 };
 
@@ -68,6 +72,13 @@ const MATERIAL_ICONS = {
 const UNASSIGNED_CLASS_KEY = "unassigned";
 const UNASSIGNED_CLASS_LABEL = "Unassigned / all classes";
 
+const AI_MODES = [
+  ["portal", "Portal help"],
+  ["study", "Study coach"],
+  ["brain-sprint", "Brain Sprint hints"],
+  ["tutor", "General tutor"]
+];
+
 const state = {
   user: null,
   data: null,
@@ -86,6 +97,12 @@ const state = {
   complaints: [],
   complaintStats: null,
   complaintFilters: { q: "", status: "all", role: "all" },
+  discussionThreads: [],
+  discussionReports: [],
+  discussionClasses: [],
+  discussionStats: null,
+  discussionFilters: { q: "", classId: "all" },
+  discussionOpenId: null,
   leaderboard: null,
   leaderboardClassId: null,
   leaderboardClasses: [],
@@ -130,6 +147,14 @@ const idle = {
   started: false
 };
 const IDLE_STORAGE_KEY = "gbat:idle-activity";
+
+// The AI drawer lives outside #app, so its state stays outside `state` too.
+const ai = {
+  open: false,
+  mode: "portal",
+  messages: [],
+  busy: false
+};
 
 function esc(value) {
   return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, char => ({
@@ -1003,6 +1028,10 @@ function handleSessionExpired(error) {
   const message = error && error.code === "SESSION_EXPIRED"
     ? "Your session expired after a period of inactivity. Please sign in again."
     : "Your session expired. Please sign in again.";
+  ai.open = false;
+  ai.messages = [];
+  ai.busy = false;
+  renderAiDrawer();
   showLogin(message);
 }
 
@@ -1322,6 +1351,10 @@ async function afterLogin(user) {
   state.leaderboardClassId = null;
   state.leaderboardClasses = [];
   state.leaderboardPeriod = "week";
+  ai.open = false;
+  ai.messages = [];
+  ai.busy = false;
+  renderAiDrawer();
   await syncIdleSession();
   if (user.mustChangePassword) {
     showPassword(true);
@@ -1355,6 +1388,7 @@ async function refresh() {
   try {
     await loadData();
     if (state.view === "complaints") await loadComplaints();
+    if (state.view === "discussion") await loadDiscussion();
     if (state.view === "materials") await loadMaterials();
     state.results = null;
     state.resultsQuizId = null;
@@ -1392,6 +1426,13 @@ async function navTo(view) {
   if (view === "complaints") {
     try {
       await loadComplaints();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (view === "discussion") {
+    try {
+      await loadDiscussion();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1465,6 +1506,7 @@ function renderShell() {
               <strong>${esc(user.name)}</strong>
               <span>${esc(roleLabel)}${user.className ? ` · ${esc(user.className)}` : ""}</span>
             </div>
+            <button type="button" class="btn btn-sm btn-primary" data-action="open-ai-drawer">AI Guide</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="open-password">Password</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="logout">Sign out</button>
           </div>
@@ -1545,6 +1587,7 @@ function renderAdminView() {
   if (state.view === "quizzes") return renderAdminQuizzes();
   if (state.view === "activity") return renderAdminActivity();
   if (state.view === "complaints") return renderComplaints();
+  if (state.view === "discussion") return renderDiscussion();
   if (state.view === "settings") return renderAdminSettings();
   return renderAdminOverview();
 }
@@ -1962,6 +2005,7 @@ function renderTeacherView() {
   if (state.view === "submissions") return renderTeacherSubmissions();
   if (state.view === "announcements") return renderTeacherAnnouncements();
   if (state.view === "complaints") return renderComplaints();
+  if (state.view === "discussion") return renderDiscussion();
   return renderTeacherOverview();
 }
 
@@ -2722,6 +2766,160 @@ function renderComplaints() {
     </section>`;
 }
 
+function renderDiscussionReply(reply, thread) {
+  const isStaff = ["admin", "teacher"].includes(state.user.role);
+  return `
+    <div class="reply-card discussion-reply ${reply.hidden ? "is-hidden" : ""}">
+      <p class="cell-sub">${esc(reply.authorName)} · ${esc(ROLE_LABEL[reply.authorRole] || reply.authorRole)} · ${esc(fmtDate(reply.createdAt))}${reply.hidden ? " · Hidden by staff" : ""}</p>
+      <p class="small pre-line">${esc(reply.body)}</p>
+      <div class="row-actions">
+        <button type="button" class="link-btn" data-action="report-discussion-post" data-id="${reply.id}" data-target="reply">Report</button>
+        ${isStaff ? `<button type="button" class="link-btn" data-action="toggle-discussion-hidden" data-id="${reply.id}" data-target="reply" data-status="${reply.hidden ? "hidden" : "visible"}">${reply.hidden ? "Unhide" : "Hide"}</button>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderDiscussionThread(thread) {
+  const isStaff = ["admin", "teacher"].includes(state.user.role);
+  const open = state.discussionOpenId === thread.id;
+  return `
+    <article class="discussion-item ${thread.hidden ? "is-hidden" : ""}">
+      <div class="discussion-head">
+        <div>
+          <h3>${esc(thread.title)}</h3>
+          <p class="cell-sub">${esc(thread.authorName)} · ${esc(ROLE_LABEL[thread.authorRole] || thread.authorRole)}${thread.className ? ` · ${esc(thread.className)}` : ""} · ${esc(fmtDate(thread.createdAt))}</p>
+        </div>
+        <div class="row-actions">
+          ${thread.hidden ? badge("Hidden", "warn") : ""}
+          <button type="button" class="btn btn-sm btn-ghost" data-action="toggle-discussion-thread" data-id="${thread.id}">${open ? "Close replies" : `Replies (${thread.replyCount})`}</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="report-discussion-post" data-id="${thread.id}" data-target="thread">Report</button>
+          ${isStaff ? `<button type="button" class="btn btn-sm btn-ghost" data-action="toggle-discussion-hidden" data-id="${thread.id}" data-target="thread" data-status="${thread.hidden ? "hidden" : "visible"}">${thread.hidden ? "Unhide" : "Hide"}</button>` : ""}
+        </div>
+      </div>
+      <p class="small pre-line">${esc(thread.body)}</p>
+      ${open ? `
+        <div class="reply-list">
+          ${thread.replies.length ? thread.replies.map(reply => renderDiscussionReply(reply, thread)).join("") : `<p class="form-note">No replies yet. Start the conversation.</p>`}
+        </div>
+        <form class="inline-form discussion-reply-form" data-form="create-discussion-reply">
+          <input type="hidden" name="threadId" value="${thread.id}">
+          <div class="field">
+            <label class="sr-only" for="discussion-reply-${thread.id}">Reply to ${esc(thread.title)}</label>
+            <textarea id="discussion-reply-${thread.id}" name="body" rows="2" maxlength="4000" required placeholder="Write a helpful reply…"></textarea>
+          </div>
+          <p class="form-error" data-form-error role="alert"></p>
+          <button type="submit" class="btn btn-primary btn-sm">Reply</button>
+        </form>` : ""}
+    </article>`;
+}
+
+function renderDiscussion() {
+  const isStaff = ["admin", "teacher"].includes(state.user.role);
+  const threads = state.discussionThreads || [];
+  const reports = state.discussionReports || [];
+  const classes = state.discussionClasses || [];
+  const filters = state.discussionFilters;
+
+  return `
+    ${pageHead("Learn together", "Class discussion", isStaff
+      ? "See class conversations, review reports and hide content when needed."
+      : "Ask questions and share what you know with your classmates.")}
+    <div class="stat-grid">
+      ${statCard("Threads", threads.length)}
+      ${statCard("Replies", threads.reduce((sum, thread) => sum + thread.replyCount, 0), "", "green")}
+      ${isStaff ? statCard("Open reports", reports.length, "", "gold") : statCard("Your class", state.user.className || "—", "", "purple")}
+    </div>
+    <section class="panel mt-1">
+      <div class="panel-head"><h2 class="panel-title">Start a discussion</h2></div>
+      <div class="panel-body">
+        <form class="form" data-form="create-discussion-thread">
+          ${isStaff ? `
+            <div class="field">
+              <label for="discussion-class">Class</label>
+              <select id="discussion-class" name="classId" required>
+                ${classes.map(cls => `<option value="${cls.id}">${esc(cls.name)}</option>`).join("")}
+              </select>
+            </div>` : ""}
+          <div class="field">
+            <label for="discussion-title">Title</label>
+            <input id="discussion-title" name="title" type="text" maxlength="160" required placeholder="What would you like to discuss?">
+          </div>
+          <div class="field">
+            <label for="discussion-body">Your message</label>
+            <textarea id="discussion-body" name="body" maxlength="4000" required placeholder="Ask a question or share a study tip."></textarea>
+          </div>
+          <p class="form-error" data-form-error role="alert"></p>
+          <div><button type="submit" class="btn btn-primary">Post to discussion</button></div>
+        </form>
+      </div>
+    </section>
+    <section class="panel mt-1">
+      <div class="panel-head"><h2 class="panel-title">Find a thread</h2></div>
+      <div class="panel-body">
+        <form class="inline-form" data-form="filter-discussion">
+          <div class="field">
+            <label for="discussion-search">Search</label>
+            <input id="discussion-search" name="q" type="search" maxlength="120" placeholder="Title, message or author" value="${esc(filters.q)}">
+          </div>
+          ${isStaff && classes.length ? `
+            <div class="field">
+              <label for="discussion-filter-class">Class</label>
+              <select id="discussion-filter-class" name="classId">
+                <option value="all" ${filters.classId === "all" ? "selected" : ""}>All assigned classes</option>
+                ${classes.map(cls => `<option value="${cls.id}" ${String(filters.classId) === String(cls.id) ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}
+              </select>
+            </div>` : ""}
+          <p class="form-error" data-form-error role="alert"></p>
+          <button type="submit" class="btn btn-primary">Apply</button>
+          <button type="button" class="btn" data-action="clear-discussion-filter">Clear</button>
+        </form>
+      </div>
+    </section>
+    ${isStaff ? `
+      <section class="panel mt-1">
+        <div class="panel-head"><h2 class="panel-title">Open reports</h2></div>
+        ${reports.length ? reports.map(report => `
+          <article class="discussion-report">
+            <div class="discussion-head">
+              <div>
+                <h3>${esc(report.title || `${ROLE_LABEL[report.targetKind] || report.targetKind} report`)}</h3>
+                <p class="cell-sub">${esc(report.reporterName)} · ${esc(report.reason)} · ${esc(fmtDate(report.createdAt))}${report.className ? ` · ${esc(report.className)}` : ""}</p>
+              </div>
+              <div class="row-actions">
+                <button type="button" class="btn btn-sm btn-ghost" data-action="resolve-discussion-report" data-id="${report.id}">Resolve</button>
+              </div>
+            </div>
+            <p class="small pre-line">${esc(report.excerpt)}</p>
+            <p class="form-note">Reported author: ${esc(report.authorName || "Unknown")}</p>
+          </article>`).join("") : `<p class="form-note">No open reports.</p>`}
+      </section>` : ""}
+    <section class="panel mt-1">
+      <div class="panel-head"><h2 class="panel-title">${esc(threads.length)} thread${threads.length === 1 ? "" : "s"}</h2></div>
+      ${threads.length ? threads.map(renderDiscussionThread).join("") : emptyState("No discussions yet", "Start the first thread above, or check back after your classmates post.")}
+    </section>`;
+}
+
+async function loadDiscussion() {
+  const query = new URLSearchParams();
+  const filters = state.discussionFilters;
+  if (filters.q && filters.q.trim()) query.set("q", filters.q.trim());
+  if (filters.classId && filters.classId !== "all" && ["admin", "teacher"].includes(state.user.role)) {
+    query.set("classId", filters.classId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const isStaff = ["admin", "teacher"].includes(state.user.role);
+  const [threads, reports] = await Promise.all([
+    api(`/discussion${suffix}`),
+    isStaff ? api("/discussion/reports?status=open") : Promise.resolve({ reports: [] })
+  ]);
+
+  state.discussionThreads = threads.threads;
+  state.discussionClasses = threads.classes;
+  state.discussionStats = threads.stats;
+  state.discussionReports = reports.reports;
+  return threads;
+}
+
 /* Student */
 
 function renderStudentView() {
@@ -2731,6 +2929,7 @@ function renderStudentView() {
   if (state.view === "rewards") return renderStudentRewards();
   if (state.view === "results") return renderStudentResults();
   if (state.view === "complaints") return renderComplaints();
+  if (state.view === "discussion") return renderDiscussion();
   return renderStudentDashboard();
 }
 
@@ -5031,6 +5230,42 @@ async function runAction(button) {
       toast(status === "closed" ? "Complaint closed." : "Complaint reopened.", "success");
       return;
     }
+    case "open-ai-drawer":
+      toggleAiDrawer(true);
+      return;
+    case "close-ai-drawer":
+      toggleAiDrawer(false);
+      return;
+    case "toggle-discussion-thread":
+      state.discussionOpenId = state.discussionOpenId === id ? null : id;
+      render();
+      return;
+    case "report-discussion-post":
+      openReportDiscussion(id, button.dataset.target || "thread");
+      return;
+    case "toggle-discussion-hidden": {
+      const target = button.dataset.target || "thread";
+      const hidden = button.dataset.status !== "hidden";
+      const path = target === "reply"
+        ? `/discussion/replies/${id}/visibility`
+        : `/discussion/threads/${id}/visibility`;
+      await api(path, { method: "PATCH", body: { hidden } });
+      await loadDiscussion();
+      render();
+      toast(hidden ? "Post hidden from students." : "Post visible again.", "success");
+      return;
+    }
+    case "resolve-discussion-report":
+      await api(`/discussion/reports/${id}`, { method: "PATCH", body: { status: "resolved" } });
+      await loadDiscussion();
+      render();
+      toast("Report resolved.", "success");
+      return;
+    case "clear-discussion-filter":
+      state.discussionFilters = { q: "", classId: "all" };
+      await loadDiscussion();
+      render();
+      return;
     case "open-rename-user":
       openRenameUser(id);
       return;
@@ -5262,6 +5497,7 @@ async function runAction(button) {
 
 async function logout() {
   closeModal();
+  toggleAiDrawer(false);
   clearTimer();
   stopBrainTimer();
   try {
@@ -5538,6 +5774,75 @@ async function handleSubmit(form) {
       render();
       toast("Reply sent.", "success");
     });
+    return;
+  }
+
+  if (formType === "create-discussion-thread") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const payload = {
+        title: String(data.get("title") || "").trim(),
+        body: String(data.get("body") || "").trim()
+      };
+      if (data.get("classId")) payload.classId = Number(data.get("classId"));
+      await api("/discussion/threads", { method: "POST", body: payload });
+      form.reset();
+      await loadDiscussion();
+      render();
+      toast("Your post is live in your class.", "success");
+    });
+    return;
+  }
+
+  if (formType === "filter-discussion") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      state.discussionFilters = {
+        q: String(data.get("q") || "").trim(),
+        classId: String(data.get("classId") || "all")
+      };
+      state.discussionOpenId = null;
+      await loadDiscussion();
+      render();
+    });
+    return;
+  }
+
+  if (formType === "create-discussion-reply") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const threadId = Number(data.get("threadId"));
+      await api(`/discussion/threads/${threadId}/replies`, {
+        method: "POST",
+        body: { body: String(data.get("body") || "").trim() }
+      });
+      state.discussionOpenId = threadId;
+      await loadDiscussion();
+      render();
+      toast("Reply posted.", "success");
+    });
+    return;
+  }
+
+  if (formType === "report-discussion-post") {
+    await runForm(form, async () => {
+      const data = new FormData(form);
+      const id = Number(data.get("id"));
+      const target = String(data.get("target") || "thread");
+      const path = target === "reply"
+        ? `/discussion/replies/${id}/report`
+        : `/discussion/threads/${id}/report`;
+      await api(path, { method: "POST", body: { reason: String(data.get("reason") || "other") } });
+      closeModal();
+      await loadDiscussion();
+      render();
+      toast("Thanks. A teacher will review the report.", "success");
+    });
+    return;
+  }
+
+  if (formType === "ai-ask") {
+    await sendAiMessage(form);
     return;
   }
 
@@ -5832,13 +6137,130 @@ async function handleSubmit(form) {
   }
 }
 
+/* AI guide drawer */
+
+function renderAiDrawer() {
+  if (!aiDrawerEl) return;
+  aiDrawerEl.hidden = !ai.open;
+  aiDrawerEl.setAttribute("aria-hidden", String(!ai.open));
+  if (!ai.open) return;
+
+  const messages = ai.messages.length ? ai.messages.map(message => `
+    <div class="ai-message ${message.role === "user" ? "from-user" : "from-guide"} ${message.blocked ? "is-safe-reply" : ""}">
+      <p class="ai-message-label">${message.role === "user" ? "You" : "AI Guide"}</p>
+      <p class="small pre-line">${esc(message.text)}</p>
+    </div>`).join("") : `
+    <div class="ai-welcome">
+      <p class="small">Ask about navigation, study concepts, Brain Sprint strategy or a general topic. I never give exam answers.</p>
+      <p class="form-note">Try: “How do I find my results?” or “Give me a strategy for number puzzles.”</p>
+    </div>`;
+
+  aiDrawerEl.innerHTML = `
+    <div class="ai-drawer-head">
+      <div>
+        <span class="eyebrow">Help when you need it</span>
+        <h2 class="page-title-sm">AI Guide</h2>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-ai-drawer" aria-label="Close AI Guide">×</button>
+    </div>
+    <div class="ai-drawer-body">
+      <div class="field">
+        <label for="ai-mode">What do you need?</label>
+        <select id="ai-mode" data-ai-mode>
+          ${AI_MODES.map(([value, label]) => `<option value="${value}" ${ai.mode === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="notice ai-notice">
+        <p class="small">Exams stay protected. Practice questions get hints and strategies, never exact answers.</p>
+      </div>
+      <div class="ai-messages" aria-live="polite">${messages}</div>
+    </div>
+    <form class="ai-form" data-form="ai-ask">
+      <label class="sr-only" for="ai-prompt">Ask the AI Guide</label>
+      <textarea id="ai-prompt" name="prompt" rows="2" maxlength="1200" required placeholder="Type your question…" ${ai.busy ? "disabled" : ""}></textarea>
+      <p class="form-error" data-form-error role="alert"></p>
+      <button type="submit" class="btn btn-primary btn-sm" ${ai.busy ? "disabled" : ""}>${ai.busy ? "Thinking…" : "Send"}</button>
+    </form>`;
+
+  const stream = aiDrawerEl.querySelector(".ai-messages");
+  if (stream) stream.scrollTop = stream.scrollHeight;
+  const prompt = aiDrawerEl.querySelector("#ai-prompt");
+  if (prompt && !ai.busy) prompt.focus({ preventScroll: true });
+}
+
+function toggleAiDrawer(open) {
+  ai.open = typeof open === "boolean" ? open : !ai.open;
+  renderAiDrawer();
+}
+
+async function sendAiMessage(form) {
+  const input = form.querySelector('[name="prompt"]');
+  const prompt = input ? String(input.value || "").trim() : "";
+  if (!prompt) {
+    showFormError(form, "Enter a question first.");
+    return;
+  }
+
+  ai.messages.push({ role: "user", text: prompt });
+  ai.busy = true;
+  renderAiDrawer();
+
+  try {
+    const result = await api("/ai-guide/ask", {
+      method: "POST",
+      body: { mode: ai.mode, prompt }
+    });
+    ai.messages.push({
+      role: "guide",
+      text: result.reply,
+      blocked: Boolean(result.blocked)
+    });
+  } catch (error) {
+    ai.messages.push({ role: "guide", text: error.message, error: true });
+  } finally {
+    ai.busy = false;
+    renderAiDrawer();
+  }
+}
+
+function openReportDiscussion(id, target) {
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Report this post</h2>
+        <p>Your teacher will see the report. Your name stays attached for follow-up.</p>
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <form class="form" data-form="report-discussion-post">
+        <input type="hidden" name="id" value="${id}">
+        <input type="hidden" name="target" value="${esc(target)}">
+        <div class="field">
+          <label for="discussion-report-reason">Reason</label>
+          <select id="discussion-report-reason" name="reason">
+            <option value="spam">Spam</option>
+            <option value="bullying">Bullying or unkind</option>
+            <option value="incorrect">Incorrect information</option>
+            <option value="other">Something else</option>
+          </select>
+        </div>
+        <p class="form-error" data-form-error role="alert"></p>
+        <div class="modal-actions modal-actions-flat">
+          <button type="button" class="btn" data-action="close-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Send report</button>
+        </div>
+      </form>
+    </div>`);
+}
+
 /* Events */
 
 document.addEventListener("click", async event => {
   addRipple(event);
   const button = event.target.closest("[data-action]");
   if (!button) return;
-  if (!appEl.contains(button) && !modalEl.contains(button)) return;
+  if (!appEl.contains(button) && !modalEl.contains(button) && !(aiDrawerEl && aiDrawerEl.contains(button))) return;
   event.preventDefault();
 
   try {
@@ -5849,6 +6271,11 @@ document.addEventListener("click", async event => {
 });
 
 document.addEventListener("change", async event => {
+  const aiMode = event.target.closest("[data-ai-mode]");
+  if (aiMode) {
+    ai.mode = aiMode.value;
+    return;
+  }
   if (event.target.closest("[data-question-select]")) {
     updateQuestionSelectionUi();
     return;
@@ -5927,6 +6354,12 @@ document.addEventListener("submit", async event => {
 
 modalEl.addEventListener("click", event => {
   if (event.target === modalEl) closeModal();
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && ai.open && !modalEl.open) {
+    toggleAiDrawer(false);
+  }
 });
 
 for (const type of ["pointerdown", "keydown", "wheel", "touchstart"]) {

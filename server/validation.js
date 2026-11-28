@@ -213,6 +213,33 @@ const gameFinishSchema = z.object({
   sessionId: idSchema
 });
 
+const discussionThreadCreateSchema = z.object({
+  title: z.string().trim().min(3, "Title must be at least 3 characters.").max(160, "Title is too long."),
+  body: z.string().trim().min(5, "Write at least 5 characters.").max(4000, "Message is too long.")
+});
+
+const discussionReplyCreateSchema = z.object({
+  body: z.string().trim().min(1, "Enter a reply.").max(4000, "Reply is too long.")
+});
+
+const discussionReportCreateSchema = z.object({
+  reason: z.enum(["spam", "bullying", "incorrect", "other"])
+});
+
+const discussionModerationSchema = z.object({
+  hidden: z.boolean()
+});
+
+const discussionReportStatusSchema = z.object({
+  status: z.enum(["open", "resolved"])
+});
+
+const aiGuideSchema = z.object({
+  mode: z.enum(["portal", "study", "brain-sprint", "tutor"]).default("portal"),
+  prompt: z.string().trim().min(1, "Enter a question.").max(1200, "Question is too long."),
+  topic: z.string().trim().max(120).optional()
+});
+
 const httpUrlSchema = z.string().trim().max(2000).refine(value => {
   try {
     return ["http:", "https:"].includes(new URL(value).protocol);
@@ -347,6 +374,12 @@ module.exports = {
   leaderboardPeriodSchema,
   gameAnswerSchema,
   gameFinishSchema,
+  discussionThreadCreateSchema,
+  discussionReplyCreateSchema,
+  discussionReportCreateSchema,
+  discussionModerationSchema,
+  discussionReportStatusSchema,
+  aiGuideSchema,
   httpUrlSchema,
   materialTypeSchema,
   materialUploadUrlSchema,
