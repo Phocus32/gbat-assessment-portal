@@ -238,9 +238,14 @@ h4 {
   gap: 2rem;
   padding: clamp(1.6rem, 3.6vw, 3.2rem);
   color: #f1fbf6;
-  background:
-    radial-gradient(circle at 86% 12%, rgba(255, 255, 255, 0.14), transparent 18rem),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 58%, rgba(0, 0, 0, 0.08));
+  background-color: #083b2c;
+  background-image:
+    radial-gradient(circle at 86% 10%, rgba(255, 255, 255, 0.08), transparent 16rem),
+    linear-gradient(180deg, rgba(4, 35, 26, 0.84) 0%, rgba(5, 42, 31, 0.66) 46%, rgba(3, 24, 18, 0.94) 100%),
+    url("/login-hero.jpg?v=31");
+  background-position: center, center, center 38%;
+  background-size: cover, cover, cover;
+  background-repeat: no-repeat;
   overflow: hidden;
 }
 
@@ -622,6 +627,7 @@ h4 {
   .auth-aside {
     gap: 1.2rem;
     padding: 1.4rem 1.25rem 1.6rem;
+    background-position: center, center, center 26%;
   }
 
   .auth-hero h1 {
