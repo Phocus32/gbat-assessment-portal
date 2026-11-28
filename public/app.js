@@ -166,7 +166,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=31";
+const LOGO_MARK = "/logo-mark.svg?v=32";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
@@ -781,6 +781,23 @@ function animateRings(root) {
       if (elapsed < 1) requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
+  });
+}
+
+/** Fills dashboard quest bars from their data targets after the cards mount. */
+function animateQuestBars(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-quest-fill]").forEach(bar => {
+    const target = Math.max(0, Math.min(100, Number(bar.dataset.target) || 0));
+    if (prefersReducedMotion()) {
+      bar.style.setProperty("--bar-width", `${target}%`);
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (bar.isConnected) bar.style.setProperty("--bar-width", `${target}%`);
+      });
+    });
   });
 }
 
@@ -1567,6 +1584,7 @@ function renderShell() {
     animateEntrance(page);
     if (user.role === "student") animateStats(page);
     animateRings(page);
+    animateQuestBars(page);
     observeReveals(page);
   }
   updateScrollUi();
@@ -3033,6 +3051,32 @@ function syncNewBadges() {
     toast(`New badge${fresh.length > 1 ? "s" : ""} unlocked: ${fresh.map(item => item.name).join(", ")}`, "success");
   }
   syncClassGoal();
+  syncLevelUp();
+}
+
+const LEVEL_XP_STORAGE_PREFIX = "lc-seen-level-xp:";
+
+function syncLevelUp() {
+  const progress = state.progress;
+  if (!progress || !progress.level) return;
+  const xp = Number(progress.level.xp) || 0;
+  const key = `${LEVEL_XP_STORAGE_PREFIX}${state.user ? state.user.id : "anon"}`;
+  let stored = null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch {
+    return;
+  }
+  try {
+    localStorage.setItem(key, String(xp));
+  } catch {
+    // Private browsing may block storage; the celebration is optional.
+  }
+  if (stored === null) return;
+  const before = Number(stored);
+  if (!Number.isFinite(before) || xp <= before) return;
+  celebrate();
+  toast(`Level up! You reached LV ${progress.level.number} · ${progress.level.title}`, "success");
 }
 
 function syncClassGoal() {
@@ -3584,6 +3628,102 @@ function openMaterialDialog() {
   applyMaterialKind();
 }
 
+function heroLevelArt() {
+  const p = state.progress;
+  if (!p || !p.level) {
+    return `
+      <div class="hero-art" aria-hidden="true">
+        <span class="hero-orb one"></span>
+        <span class="hero-orb two"></span>
+        <span class="hero-orb three"></span>
+        <span class="hero-note">Keep going! ✦</span>
+      </div>`;
+  }
+
+  const level = p.level;
+  const streak = p.streak || {};
+  const percent = Math.max(0, Math.min(100, Number(level.progressPct) || 0));
+  const circumference = (2 * Math.PI * 52).toFixed(2);
+  const flames = "🔥".repeat(Math.min(Math.max(Number(streak.current) || 0, 1), 3));
+
+  return `
+    <div class="hero-level">
+      <div class="quest-ring hero-ring" data-ring-percent="${percent}" role="img" aria-label="Level ${esc(level.number)}, ${percent}% toward level ${esc(level.nextNumber)}">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+          <circle class="ring-value" cx="60" cy="60" r="52" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference}"></circle>
+        </svg>
+        <span class="ring-center"><strong>LV ${esc(level.number)}</strong><small data-ring-number>0%</small></span>
+      </div>
+      <span class="hero-level-title">${esc(level.title || "Starter")}</span>
+      <span class="hero-note">${flames} ${esc(streak.current || 0)} day streak</span>
+    </div>`;
+}
+
+function dashboardQuestBoard() {
+  const p = state.progress;
+  if (!p) return "";
+
+  const level = p.level || {};
+  const streak = p.streak || {};
+  const quests = [
+    {
+      icon: "⚡", title: "Daily spark", goal: 1,
+      value: streak.activeToday ? 1 : 0,
+      detail: streak.activeToday ? "Quiz submitted today — streak alive!" : "Submit one quiz today to keep your streak going.",
+      label: "Find a quiz", action: "scroll-quizzes"
+    },
+    {
+      icon: "🏅", title: "Badge hunter", goal: 3,
+      value: Math.min(Number(p.badgesEarned) || 0, 3),
+      detail: "Collect three badges on your reward journey.",
+      label: "See badges", action: "nav", view: "rewards"
+    },
+    {
+      icon: "🔥", title: "Streak builder", goal: 3,
+      value: Math.min(Number(streak.current) || 0, 3),
+      detail: "Keep a three-day quiz streak.",
+      label: "See rewards", action: "nav", view: "rewards"
+    },
+    {
+      icon: "⭐", title: "XP climber", goal: 500,
+      value: Math.min(Number(level.xp) || 0, 500),
+      detail: "Earn 500 XP across all your attempts.",
+      label: "See progress", action: "nav", view: "rewards"
+    }
+  ];
+
+  return `
+    <section class="panel quest-board">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Your quests</h2>
+          <span class="cell-sub">Small wins add up — every attempt moves a bar.</span>
+        </div>
+        <span class="pill">${quests.filter(item => item.value >= item.goal).length}/${quests.length} complete</span>
+      </div>
+      <div class="panel-body quest-grid">
+        ${quests.map((quest, index) => {
+          const done = quest.value >= quest.goal;
+          const percent = Math.round((quest.value / quest.goal) * 100);
+          return `
+            <article class="quest-tile ${done ? "is-done" : ""}" data-reveal style="--reveal-delay: ${Math.min(index * 60, 240)}ms">
+              <span class="quest-tile-icon" aria-hidden="true">${quest.icon}</span>
+              <div class="quest-tile-main">
+                <div class="quest-tile-head">
+                  <strong>${esc(quest.title)}</strong>
+                  <span>${done ? "✓ Done" : `${esc(quest.value)}/${esc(quest.goal)}`}</span>
+                </div>
+                <span class="progress-track quest-tile-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}" aria-label="${esc(quest.title)} progress" data-quest-fill data-target="${percent}" style="--bar-width: 0%"><span></span></span>
+                <small>${esc(quest.detail)}</small>
+              </div>
+              <button type="button" class="btn btn-sm ${done ? "btn-ghost" : "btn-primary"}" data-action="${esc(quest.action)}"${quest.view ? ` data-view="${esc(quest.view)}"` : ""}>${esc(quest.label)}</button>
+            </article>`;
+        }).join("")}
+      </div>
+    </section>`;
+}
+
 function studentHero() {
   const d = state.data;
   const p = state.progress;
@@ -3605,7 +3745,7 @@ function studentHero() {
             <div class="xp-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(p.level.progressPct) || 0}" aria-label="Progress to level ${esc(p.level.nextNumber)}">
               <span style="--bar-width: ${Number(p.level.progressPct) || 0}%"></span>
             </div>
-            <span class="xp-caption">${esc(p.level.xp)} XP · ${esc(p.level.xpToNext)} to LV ${esc(p.level.nextNumber)}</span>
+            <span class="xp-caption"><strong data-stat-value>${esc(p.level.xp)}</strong> XP · ${esc(p.level.xpToNext)} to LV ${esc(p.level.nextNumber)}</span>
             <span class="xp-streak" title="${esc(p.streak.current)}-day quiz streak">🔥 ${esc(p.streak.current)}</span>
           </div>` : ""}
         <div class="hero-actions">
@@ -3616,12 +3756,7 @@ function studentHero() {
           <button type="button" class="btn btn-ghost" data-action="nav" data-view="results">See my progress</button>
         </div>
       </div>
-      <div class="hero-art" aria-hidden="true">
-        <span class="hero-orb one"></span>
-        <span class="hero-orb two"></span>
-        <span class="hero-orb three"></span>
-        <span class="hero-note">Keep going! ✦</span>
-      </div>
+      ${heroLevelArt()}
     </section>`;
 }
 
@@ -3636,6 +3771,7 @@ function renderStudentDashboard() {
       ${statCard("Average", `${d.stats.average}%`, "Best attempt per quiz", "gold")}
       ${statCard("Passed", d.stats.passed, `Best score of ${esc(d.settings.passMark)}% or more`, "coral")}
     </div>
+    ${dashboardQuestBoard()}
     <section class="brain-promo">
       <span class="brain-promo-icon" aria-hidden="true">⚡</span>
       <div class="brain-promo-copy">

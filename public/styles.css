@@ -833,10 +833,14 @@ h4 {
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: var(--radius);
   color: #f4fff9;
-  background:
-    radial-gradient(circle at 12% 20%, rgba(255, 255, 255, 0.2), transparent 15rem),
-    radial-gradient(circle at 88% 85%, rgba(231, 179, 74, 0.35), transparent 18rem),
-    linear-gradient(135deg, #0d4c39 0%, #157355 58%, #2e8f6b 100%);
+  background-color: #0d4c39;
+  background-image:
+    linear-gradient(90deg, rgba(6, 46, 34, 0.95) 0%, rgba(8, 58, 43, 0.82) 48%, rgba(7, 40, 30, 0.62) 100%),
+    radial-gradient(circle at 88% 85%, rgba(231, 179, 74, 0.28), transparent 18rem),
+    url("/dashboard-hero.jpg?v=32");
+  background-position: center, center, center 42%;
+  background-size: cover;
+  background-repeat: no-repeat;
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -964,6 +968,53 @@ h4 {
   font-weight: 800;
   transform: rotate(-4deg);
   animation: note-bob 4s ease-in-out infinite;
+}
+
+.hero-level {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 0.35rem;
+  min-height: 9rem;
+}
+
+.hero-ring {
+  width: 9rem;
+  height: 9rem;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.28));
+}
+
+.hero-ring .ring-track {
+  stroke: rgba(255, 255, 255, 0.28);
+}
+
+.hero-ring .ring-value {
+  stroke: #ffe08a;
+}
+
+.hero-ring .ring-center strong {
+  color: #ffffff;
+  font-size: 1.5rem;
+}
+
+.hero-ring .ring-center small {
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.hero-level-title {
+  color: #fff6dd;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-level .hero-note {
+  position: static;
+  transform: none;
+  animation: none;
 }
 
 .stat-grid {
@@ -2812,7 +2863,8 @@ progress::-moz-progress-bar {
     grid-template-columns: 1fr;
   }
 
-  .hero-art {
+  .hero-art,
+  .hero-level {
     min-height: 7rem;
   }
 
@@ -3606,6 +3658,112 @@ progress::-moz-progress-bar {
 
   .xp-track {
     width: 5rem;
+  }
+}
+
+/* Student dashboard quest board */
+
+.quest-board {
+  border-color: rgba(15, 92, 69, 0.28);
+  background: linear-gradient(135deg, var(--surface), var(--brand-soft));
+}
+
+.quest-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.quest-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.quest-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft);
+}
+
+.quest-tile.is-done {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.quest-tile-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  font-size: 1.1rem;
+}
+
+.quest-tile.is-done .quest-tile-icon {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.quest-tile-main {
+  min-width: 0;
+}
+
+.quest-tile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+}
+
+.quest-tile-head span {
+  color: var(--brand);
+  font-size: 0.74rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.quest-tile.is-done .quest-tile-head span {
+  color: var(--ok);
+}
+
+.quest-tile-track {
+  height: 0.42rem;
+  margin: 0.4rem 0 0.35rem;
+  background: rgba(15, 92, 69, 0.12);
+}
+
+.quest-tile.is-done .progress-track span {
+  background: var(--ok);
+}
+
+.quest-tile-main small {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 760px) {
+  .student-hero {
+    background-image:
+      linear-gradient(180deg, rgba(6, 46, 34, 0.94), rgba(8, 58, 43, 0.8)),
+      url("/dashboard-hero.jpg?v=32");
+    background-position: center, center 45%;
+  }
+
+  .hero-ring {
+    width: 7rem;
+    height: 7rem;
+  }
+
+  .quest-grid {
+    grid-template-columns: 1fr;
   }
 }
 
