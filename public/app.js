@@ -166,7 +166,7 @@ function esc(value) {
   }[char]));
 }
 
-const LOGO_MARK = "/logo-mark.svg?v=22";
+const LOGO_MARK = "/logo-mark.svg?v=29";
 
 function brandMark() {
   return `<img class="brand-mark" src="${LOGO_MARK}" alt="" aria-hidden="true">`;
