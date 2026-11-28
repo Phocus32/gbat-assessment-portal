@@ -1239,6 +1239,34 @@ function showPassword(forced) {
   renderPassword();
 }
 
+function authBackdropHtml() {
+  return `
+    <div class="auth-backdrop" aria-hidden="true">
+      <span class="auth-glow glow-one"></span>
+      <span class="auth-glow glow-two"></span>
+      <span class="auth-glow glow-three"></span>
+      <span class="auth-grid"></span>
+    </div>`;
+}
+
+function authCredit() {
+  return `<footer class="auth-credit">Designed by <strong>Daniel Owusu Frimpong</strong></footer>`;
+}
+
+function authFrame(cardHtml) {
+  return `
+    <div class="auth-wrap">
+      ${authBackdropHtml()}
+      <div class="auth-shell">
+        ${authAsideHtml()}
+        <main class="auth-main" id="main-content" tabindex="-1">
+          ${cardHtml}
+          ${authCredit()}
+        </main>
+      </div>
+    </div>`;
+}
+
 function authAsideHtml() {
   return `
     <aside class="auth-aside">
@@ -1251,47 +1279,67 @@ function authAsideHtml() {
       </div>
       <div class="auth-hero">
         <span class="eyebrow">Learner assessment workspace</span>
-        <h1>Assess with clarity and confidence.</h1>
-        <p>A focused workspace for practice, timed exams and class-level results.</p>
+        <h1>Learn with focus.<br><span>Grow with confidence.</span></h1>
+        <p>A calmer, clearer place to practise, sit timed exams and see how far you have come.</p>
         <ul class="feature-list">
-          <li>Individual accounts with role-based access</li>
-          <li>Practice with instant worked feedback</li>
-          <li>Timed exams that never reveal answers early</li>
-          <li>Class results ready for review and export</li>
+          <li>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5v-16Z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5v-16Z"/></svg>
+            </span>
+            <span class="feature-copy"><strong>Practice that teaches</strong><small>Instant feedback and worked solutions after every attempt.</small></span>
+          </li>
+          <li>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </span>
+            <span class="feature-copy"><strong>Exams without surprises</strong><small>Timed, secure and designed to protect every answer.</small></span>
+          </li>
+          <li>
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15v-4"/><path d="M12 15V7"/><path d="M16 15v-6"/></svg>
+            </span>
+            <span class="feature-copy"><strong>Progress you can see</strong><small>Class results, personal rewards and a clear next step.</small></span>
+          </li>
         </ul>
       </div>
-      <p class="auth-aside-foot">Authorised school users only. Sessions are encrypted and monitored.</p>
+      <p class="auth-aside-foot"><span class="auth-status-dot" aria-hidden="true"></span>Secure, school-only access</p>
     </aside>`;
 }
 
 function renderLogin() {
-  appEl.innerHTML = `
-    <div class="auth-wrap">
-      ${authAsideHtml()}
-      <main class="auth-main" id="main-content" tabindex="-1">
-        <section class="auth-card">
-          <span class="eyebrow">Secure sign in</span>
-          <h2>Welcome back</h2>
-          <p class="auth-sub">Use the account issued by your school administrator.</p>
-          <form class="form" data-form="login" novalidate>
-            <p class="form-error" data-form-error role="alert">${esc(state.loginMessage)}</p>
-            <div class="field">
-              <label for="login-username">Username</label>
-              <input id="login-username" name="username" type="text" autocomplete="username" maxlength="80" required autofocus>
-            </div>
-            <div class="field">
-              <label for="login-password">Password</label>
-              <div class="password-wrap">
-                <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="72" required>
-                <button type="button" class="password-toggle" data-action="toggle-password" data-target="login-password">Show</button>
-              </div>
-            </div>
-            <button class="btn btn-primary btn-block" type="submit">Sign in</button>
-          </form>
-          <p class="auth-foot">Forgotten your password? Ask your administrator to reset it. Every account has its own private password.</p>
-        </section>
-      </main>
-    </div>`;
+  appEl.innerHTML = authFrame(`
+    <section class="auth-card">
+      <div class="auth-card-head">
+        <span class="eyebrow">Secure sign in</span>
+        <h2>Welcome back</h2>
+        <p class="auth-sub">Sign in with the account issued by your school administrator.</p>
+      </div>
+      <form class="form" data-form="login" novalidate>
+        <p class="form-error" data-form-error role="alert">${esc(state.loginMessage)}</p>
+        <div class="field">
+          <label for="login-username">Username</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+            </span>
+            <input id="login-username" name="username" type="text" autocomplete="username" maxlength="80" placeholder="Enter your username" required autofocus>
+          </div>
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <div class="password-wrap auth-input-wrap">
+            <span class="auth-input-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+            </span>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="72" placeholder="Enter your password" required>
+            <button type="button" class="password-toggle" data-action="toggle-password" data-target="login-password">Show</button>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-block auth-submit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+      </form>
+      <div class="auth-divider"><span>Account help</span></div>
+      <p class="auth-foot">Forgotten your password? Ask your administrator to reset it. Every account has its own private password.</p>
+    </section>`);
   requestAnimationFrame(() => {
     const username = document.getElementById("login-username");
     if (username) username.focus({ preventScroll: true });
@@ -1301,10 +1349,7 @@ function renderLogin() {
 function renderPassword() {
   const forced = state.passwordForced || (state.user && state.user.mustChangePassword);
   const name = state.user ? state.user.name : "";
-  appEl.innerHTML = `
-    <div class="auth-wrap">
-      ${authAsideHtml()}
-      <main class="auth-main" id="main-content" tabindex="-1">
+  appEl.innerHTML = authFrame(`
         <section class="auth-card">
           <span class="eyebrow">${forced ? "Password required" : "Account security"}</span>
           <h2>${forced ? "Set a new password" : "Change your password"}</h2>
@@ -1336,9 +1381,7 @@ function renderPassword() {
               ? `<button type="button" class="link-btn" data-action="logout">Sign out instead</button>`
               : `<button type="button" class="link-btn" data-action="cancel-password">Back to the portal</button>`}
           </div>
-        </section>
-      </main>
-    </div>`;
+        </section>`);
   requestAnimationFrame(() => {
     const password = document.getElementById("current-password");
     if (password) password.focus({ preventScroll: true });
